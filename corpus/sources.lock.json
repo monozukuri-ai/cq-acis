@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "nist-engineering-design-models",
+      "repository": "usnistgov/engineering-design-models",
+      "commit": "dc4ed1c352bfa7fa0976c6abc6074a7a40aa1d5a",
+      "license": {
+        "spdx": "NIST-PD",
+        "source_path": "LICENSE.md",
+        "source_blob_sha1": "e32914d5081e2b69cbed72790ae7235cd1fed141",
+        "source_size": 2482,
+        "target_path": "corpus/licenses/NIST-engineering-design-models-LICENSE.md"
+      },
+      "artifacts": [
+        {"id": "nist-arm_blnk-features", "kind": "file", "source_path": "models/ACIS/NIST/arm_blnk/arm_blnk.features.sat", "source_blob_sha1": "93a52d418ef0260cf55597d74cdfbbf96a764b41", "source_size": 11882, "target_path": "corpus/data/nist/arm_blnk/arm_blnk.features.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-arm_blnk-healed-features", "kind": "file", "source_path": "models/ACIS/NIST/arm_blnk/arm_blnk.hh.f.sat", "source_blob_sha1": "0bb77c69d06d34c313b1b9fa6e2c3168e45a17cc", "source_size": 13450, "target_path": "corpus/data/nist/arm_blnk/arm_blnk.hh.f.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "nist-arm_blnk-healed", "kind": "file", "source_path": "models/ACIS/NIST/arm_blnk/arm_blnk.hh.sat", "source_blob_sha1": "c2fec334aa22ab905b5b9a5c3c8e132445fe6671", "source_size": 5951, "target_path": "corpus/data/nist/arm_blnk/arm_blnk.hh.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-arm_blnk-raw", "kind": "file", "source_path": "models/ACIS/NIST/arm_blnk/arm_blnk.sat", "source_blob_sha1": "f7303d873f4ff77fff61b91ac6fff4e051a585b8", "source_size": 4709, "target_path": "corpus/data/nist/arm_blnk/arm_blnk.sat", "dialect": "native_sat", "expected_save_version": 105},
+
+        {"id": "nist-armblnk-features", "kind": "file", "source_path": "models/ACIS/NIST/armblnk/armblnk.features.sat", "source_blob_sha1": "83dcbb7614dc122ecde81ca8bd7b383fdd660ff6", "source_size": 11882, "target_path": "corpus/data/nist/armblnk/armblnk.features.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-armblnk-healed-features", "kind": "file", "source_path": "models/ACIS/NIST/armblnk/armblnk.hh.f.sat", "source_blob_sha1": "114d9320c822220619ece0e0412fa4d66f694490", "source_size": 13436, "target_path": "corpus/data/nist/armblnk/armblnk.hh.f.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "nist-armblnk-healed", "kind": "file", "source_path": "models/ACIS/NIST/armblnk/armblnk.hh.sat", "source_blob_sha1": "37d8f08311f7a166842e6c52f7166b972dc544c8", "source_size": 5949, "target_path": "corpus/data/nist/armblnk/armblnk.hh.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-armblnk-raw", "kind": "file", "source_path": "models/ACIS/NIST/armblnk/armblnk.sat", "source_blob_sha1": "f7303d873f4ff77fff61b91ac6fff4e051a585b8", "source_size": 4709, "target_path": "corpus/data/nist/armblnk/armblnk.sat", "dialect": "native_sat", "expected_save_version": 105},
+
+        {"id": "nist-boeing_part-features", "kind": "file", "source_path": "models/ACIS/NIST/boeing_part/boeing_part.features.sat", "source_blob_sha1": "29bbb593c3a8f4bab9a43e6e018f9a300cd863e8", "source_size": 428556, "target_path": "corpus/data/nist/boeing_part/boeing_part.features.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-boeing_part-healed-features", "kind": "file", "source_path": "models/ACIS/NIST/boeing_part/boeing_part.hh.f.sat", "source_blob_sha1": "1257656ff4e49481d41eaf5285912f80c9dba299", "source_size": 496861, "target_path": "corpus/data/nist/boeing_part/boeing_part.hh.f.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "nist-boeing_part-healed", "kind": "file", "source_path": "models/ACIS/NIST/boeing_part/boeing_part.hh.sat", "source_blob_sha1": "94ac3de779c304a927ec1a60adbd506fe37789d1", "source_size": 233648, "target_path": "corpus/data/nist/boeing_part/boeing_part.hh.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-boeing_part-raw", "kind": "file", "source_path": "models/ACIS/NIST/boeing_part/boeing_part.sat", "source_blob_sha1": "6527f1ecb9be9a398730239504d8a87950a11676", "source_size": 196231, "target_path": "corpus/data/nist/boeing_part/boeing_part.sat", "dialect": "native_sat", "expected_save_version": 105},
+
+        {"id": "nist-new_demo_us-features", "kind": "file", "source_path": "models/ACIS/NIST/new_demo_us/new_demo_us.features.sat", "source_blob_sha1": "3211ffe89b7ad35984437912a175cc530676facc", "source_size": 267810, "target_path": "corpus/data/nist/new_demo_us/new_demo_us.features.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-new_demo_us-healed-features", "kind": "file", "source_path": "models/ACIS/NIST/new_demo_us/new_demo_us.hh.f.sat", "source_blob_sha1": "77ded63ae10730de0c69ba8646c99fe5f8e9058c", "source_size": 335562, "target_path": "corpus/data/nist/new_demo_us/new_demo_us.hh.f.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "nist-new_demo_us-healed", "kind": "file", "source_path": "models/ACIS/NIST/new_demo_us/new_demo_us.hh.sat", "source_blob_sha1": "1cee19f7bb7a0126ff346a3992ffea76509a15c1", "source_size": 153638, "target_path": "corpus/data/nist/new_demo_us/new_demo_us.hh.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-new_demo_us-raw", "kind": "file", "source_path": "models/ACIS/NIST/new_demo_us/new_demo_us.sat", "source_blob_sha1": "98d17d08452df674c38f8941722f8e36ff81f3e6", "source_size": 132775, "target_path": "corpus/data/nist/new_demo_us/new_demo_us.sat", "dialect": "native_sat", "expected_save_version": 105},
+
+        {"id": "nist-simple_boeing_part-features", "kind": "file", "source_path": "models/ACIS/NIST/simple_boeing_part/simple_boeing_part.features.sat", "source_blob_sha1": "31cb1136fa530400341ac36fe5da9a26c671690b", "source_size": 238828, "target_path": "corpus/data/nist/simple_boeing_part/simple_boeing_part.features.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-simple_boeing_part-healed-features", "kind": "file", "source_path": "models/ACIS/NIST/simple_boeing_part/simple_boeing_part.hh.f.sat", "source_blob_sha1": "83f918171c6baf1b31cd5d96473976010a401fd2", "source_size": 420374, "target_path": "corpus/data/nist/simple_boeing_part/simple_boeing_part.hh.f.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "nist-simple_boeing_part-healed", "kind": "file", "source_path": "models/ACIS/NIST/simple_boeing_part/simple_boeing_part.hh.sat", "source_blob_sha1": "f3915aa59ca45a96faaf10767f47f13489bb1531", "source_size": 208881, "target_path": "corpus/data/nist/simple_boeing_part/simple_boeing_part.hh.sat", "dialect": "native_sat", "expected_save_version": 600},
+        {"id": "nist-simple_boeing_part-raw", "kind": "file", "source_path": "models/ACIS/NIST/simple_boeing_part/simple_boeing_part.sat", "source_blob_sha1": "1b28d4c8058e8045b9714bf74d2a2cb2647f100e", "source_size": 175965, "target_path": "corpus/data/nist/simple_boeing_part/simple_boeing_part.sat", "dialect": "native_sat", "expected_save_version": 105}
+      ]
+    },
+    {
+      "id": "ezdxf-acis-fixtures",
+      "repository": "mozman/ezdxf",
+      "commit": "3d55300c83e17bf890eb10f3c09799e0bb042c88",
+      "license": {
+        "spdx": "MIT",
+        "source_path": "LICENSE",
+        "source_blob_sha1": "33a77673a9100f1f8553745ac6c924a6b8e58410",
+        "source_size": 1071,
+        "target_path": "corpus/licenses/ezdxf-LICENSE"
+      },
+      "artifacts": [
+        {"id": "ezdxf-cube-sat-400", "kind": "python_constant", "source_path": "tests/test_05_tools/conftest.py", "source_blob_sha1": "ba061f97f96ef30ee53633a6626d6dec417151bd", "source_size": 111195, "constant": "CUBE777_SAT_400", "target_path": "corpus/data/ezdxf/cube_sat_400.sat", "dialect": "native_sat", "expected_save_version": 400},
+        {"id": "ezdxf-cube-sat-700", "kind": "python_constant", "source_path": "tests/test_05_tools/conftest.py", "source_blob_sha1": "ba061f97f96ef30ee53633a6626d6dec417151bd", "source_size": 111195, "constant": "CUBE777_SAT_700", "target_path": "corpus/data/ezdxf/cube_sat_700.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "ezdxf-prism-sat-700", "kind": "python_constant", "source_path": "tests/test_05_tools/conftest.py", "source_blob_sha1": "ba061f97f96ef30ee53633a6626d6dec417151bd", "source_size": 111195, "constant": "PRISM", "target_path": "corpus/data/ezdxf/prism_sat_700.sat", "dialect": "native_sat", "expected_save_version": 700},
+        {"id": "ezdxf-cube-asm-sab-21800", "kind": "python_constant", "source_path": "tests/test_05_tools/conftest.py", "source_blob_sha1": "ba061f97f96ef30ee53633a6626d6dec417151bd", "source_size": 111195, "constant": "CUBE777_SAB_R2013", "target_path": "corpus/data/ezdxf/cube_asm_sab_21800.sab", "dialect": "asm_sab", "expected_save_version": 21800},
+        {"id": "ezdxf-cube-asm-sab-22300", "kind": "python_constant", "source_path": "tests/test_05_tools/conftest.py", "source_blob_sha1": "ba061f97f96ef30ee53633a6626d6dec417151bd", "source_size": 111195, "constant": "CUBE777_SAB_R2018", "target_path": "corpus/data/ezdxf/cube_asm_sab_22300.sab", "dialect": "asm_sab", "expected_save_version": 22300}
+      ]
+    }
+  ]
+}

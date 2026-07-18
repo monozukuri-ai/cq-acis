@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cq-acis"
+version = "0.1.0"
+description = "ACIS SAT/SAB parsing experiments for CadQuery"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["cadquery>=2.4"]
+license = {file = "LICENSE"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
