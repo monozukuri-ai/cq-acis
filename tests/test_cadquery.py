@@ -17,6 +17,7 @@ from cq_acis import (
     EdgeEntity,
     EllipseCurveEntity,
     FaceEntity,
+    convert_model,
     convert_sat_model,
     import_sat_file,
     parse_sat_model,
@@ -132,6 +133,16 @@ class TestCadQueryConversion(unittest.TestCase):
                 self.assertEqual(len(shapes), counts["body"])
                 self.assertTrue(all(shape.isValid() for shape in shapes))
                 self.assertTrue(all(shape.Volume() > 0.0 for shape in shapes))
+                shared_model = model.as_acis_model()
+                for adapted_model in (shared_model, shared_model.to_native()):
+                    shared_shapes = convert_model(adapted_model)
+                    self.assertEqual(len(shared_shapes), len(shapes))
+                    for legacy, shared in zip(shapes, shared_shapes):
+                        self.assertTrue(shared.isValid())
+                        self.assertAlmostEqual(shared.Volume(), legacy.Volume())
+                        self.assertAlmostEqual(shared.Area(), legacy.Area())
+                        self.assertEqual(len(shared.Faces()), len(legacy.Faces()))
+                        self.assertEqual(len(shared.Edges()), len(legacy.Edges()))
                 artifacts += 1
                 bodies += len(shapes)
         self.assertEqual(artifacts, 23)

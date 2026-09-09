@@ -9,20 +9,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum
 from typing import Iterator
+
+from .model import AcisContainer, SatRecord
 
 
 class SatParseError(ValueError):
     """Raised when SAT container framing is malformed or incomplete."""
-
-
-class AcisContainer(str, Enum):
-    """Container kind detectable without interpreting entity schemas."""
-
-    SAT = "sat"
-    SAB = "sab"
-    ASM_SAB = "asm_sab"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,15 +32,6 @@ class SatHeader:
     resnor: float | None
     line_count: int
     data_offset: int
-
-
-@dataclass(frozen=True, slots=True)
-class SatRecord:
-    entity_type: str
-    text: str
-    sequence_number: int | None
-    start_offset: int
-    end_offset: int
 
 
 @dataclass(frozen=True, slots=True)

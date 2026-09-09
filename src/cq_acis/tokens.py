@@ -3,35 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import TypeAlias
 
+from .model import CountedString, EntityRef, NULL_REF
 from .sat import SatParseError
-
-
-@dataclass(frozen=True, slots=True)
-class EntityRef:
-    """A zero-based SAT record reference; ``$-1`` is the null reference."""
-
-    index: int
-
-    @property
-    def is_null(self) -> bool:
-        return self.index == -1
-
-    def __str__(self) -> str:
-        return f"${self.index}"
-
-
-NULL_REF = EntityRef(-1)
-
-
-@dataclass(frozen=True, slots=True)
-class CountedString:
-    """An unambiguous SAT ``@<length> <value>`` string token."""
-
-    value: str
-    declared_length: int
 
 
 SatToken: TypeAlias = EntityRef | CountedString | int | float | str

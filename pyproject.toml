@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
 
 [project]
 name = "cq-acis"
@@ -11,8 +11,19 @@ requires-python = ">=3.10"
 dependencies = ["cadquery>=2.4"]
 license = {file = "LICENSE"}
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.maturin]
+manifest-path = "crates/cq-acis-py/Cargo.toml"
+python-source = "src"
+module-name = "cq_acis._native"
+features = ["pyo3/extension-module"]
+include = [
+    { path = "THIRD_PARTY_NOTICES.md", format = ["sdist", "wheel"] },
+    { path = "licenses/**", format = ["sdist", "wheel"] },
+    { path = "docs/sab-support.md", format = ["sdist", "wheel"] },
+    { path = "LICENSE", format = ["sdist", "wheel"] },
+    { path = "README.ja.md", format = "sdist" },
+]
+exclude = ["corpus/**", "tests/**", "examples/**"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

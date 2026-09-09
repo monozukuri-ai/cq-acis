@@ -1,4 +1,4 @@
-"""Conversion of the supported analytic SAT subset into CadQuery shapes."""
+"""Conversion of the supported analytic ACIS subset into CadQuery shapes."""
 
 from __future__ import annotations
 
@@ -8,28 +8,28 @@ from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from .entities import (
+from ._native import NativeModel
+from .model import (
+    AcisModelView,
     BodyEntity,
     ConeSurfaceEntity,
     CoedgeEntity,
     DecodedEntity,
     EdgeEntity,
+    EntityRef,
     EllipseCurveEntity,
     FaceEntity,
     LoopEntity,
     LumpEntity,
     PlaneSurfaceEntity,
     PointEntity,
-    SatModel,
+    RawEntity,
     ShellEntity,
     StraightCurveEntity,
     TransformEntity,
     Vec3,
     VertexEntity,
-    parse_sat_model,
 )
-from .graph import RawEntity
-from .tokens import EntityRef
 
 if TYPE_CHECKING:
     import cadquery as cq
@@ -151,13 +151,17 @@ def _load_cadquery():
 
 
 class CadQueryConverter:
-    """Build exact analytic CadQuery B-reps from a supported SAT model."""
+    """Build exact analytic CadQuery B-reps from a shared ACIS model."""
 
-    def __init__(self, model: SatModel):
+    def __init__(self, model: AcisModelView):
+        # CadQuery walks the same references repeatedly. Materialize the Python
+        # view once instead of copying native entity fields on every lookup.
+        if isinstance(model, NativeModel):
+            model = model.to_model()
         self.model = model
         self.cq = _load_cadquery()
-        unit_scale = model.graph.header.units_mm or 1.0
-        self.tolerance = (model.graph.header.resabs or 1e-6) * unit_scale
+        unit_scale = model.metadata.units_mm or 1.0
+        self.tolerance = (model.metadata.resabs or 1e-6) * unit_scale
 
     def _require(
         self,
@@ -249,7 +253,7 @@ class CadQueryConverter:
                 raise CadQueryConversionError(
                     f"body ${body.index}: transform is singular"
                 )
-        unit_scale = self.model.graph.header.units_mm
+        unit_scale = self.model.metadata.units_mm
         if unit_scale is None:
             unit_scale = 1.0
         if unit_scale <= 0.0:
@@ -874,8 +878,13 @@ class CadQueryConverter:
         return result
 
     def convert(self) -> tuple[cq.Shape, ...]:
-        """Convert every SAT body, preserving one result per body."""
+        """Convert every decoded body, preserving one result per body."""
 
+        for entity in self.model.entities:
+            if isinstance(entity, RawEntity) and entity.type_name == "body":
+                raise CadQueryConversionError(
+                    f"body ${entity.index}: body has not been decoded"
+                )
         return tuple(self.convert_body(body) for body in self.model.bodies())
 
     def workplane(self) -> cq.Workplane:
@@ -884,20 +893,28 @@ class CadQueryConverter:
         return self.cq.Workplane("XY").newObject(self.convert())
 
 
-def convert_sat_model(model: SatModel) -> tuple[cq.Shape, ...]:
-    """Convert all bodies in a parsed SAT model to CadQuery shapes."""
+def convert_model(model: AcisModelView) -> tuple[cq.Shape, ...]:
+    """Convert the supported bodies in any shared ACIS model to CadQuery shapes."""
 
     return CadQueryConverter(model).convert()
 
 
-def to_cadquery(model: SatModel) -> cq.Workplane:
-    """Convert a parsed SAT model to a CadQuery Workplane."""
+def convert_sat_model(model: AcisModelView) -> tuple[cq.Shape, ...]:
+    """Backward-compatible entrypoint; accepts SatModel and AcisModel."""
+
+    return convert_model(model)
+
+
+def to_cadquery(model: AcisModelView) -> cq.Workplane:
+    """Convert an AcisModel or legacy SatModel to a CadQuery Workplane."""
 
     return CadQueryConverter(model).workplane()
 
 
 def import_sat_data(data: str | bytes) -> cq.Workplane:
     """Parse SAT text or bytes and return its bodies on a Workplane."""
+
+    from .entities import parse_sat_model
 
     return to_cadquery(parse_sat_model(data))
 

@@ -1,0 +1,12 @@
+[package]
+name = "acis-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Container-independent ACIS models, geometry, and reference validation"
+readme = "README.md"
+
+[dependencies]
+num-bigint.workspace = true

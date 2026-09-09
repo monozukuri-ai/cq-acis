@@ -3,31 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator, overload
+from typing import overload
 
+from .model import RawEntity
 from .sat import SatDocument, SatHeader, SatParseError, SatRecord, parse_sat
 from .tokens import EntityRef, SatToken, tokenize_record
 
 
 class SatGraphError(SatParseError):
     """Raised when SAT records do not form a valid reference graph."""
-
-
-@dataclass(frozen=True, slots=True)
-class RawEntity:
-    index: int
-    type_name: str
-    attributes: EntityRef
-    entity_id: int | None
-    values: tuple[SatToken, ...]
-    record: SatRecord
-
-    def references(self, *, include_attributes: bool = True) -> Iterator[EntityRef]:
-        if include_attributes:
-            yield self.attributes
-        for value in self.values:
-            if isinstance(value, EntityRef):
-                yield value
 
 
 @dataclass(frozen=True, slots=True)

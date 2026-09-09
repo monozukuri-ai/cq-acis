@@ -14,7 +14,7 @@ CadQuery/OpenCascade shapes.
 - SAT container detection and ASCII record framing
 - Legacy one-line and modern three-line SAT headers
 - Counted `@<length>` strings used by SAT 7 and later
-- SAB and Autodesk ShapeManager SAB preamble detection
+- SAB and Autodesk ShapeManager SAB parsing for explicitly admitted profiles
 - Entity-reference graph validation for `$n` pointers
 - Typed decoding for SAT save versions 105, 400, 600, and 700
 - Typed topology and analytic geometry entities:
@@ -26,6 +26,8 @@ CadQuery/OpenCascade shapes.
 - Splitting of non-manifold ACIS shells into valid CadQuery solids and
   compounds
 - Preservation of unsupported records as `RawEntity`
+- Reusable Rust `acis-core` models, reference validation, and analytic helpers,
+  with a PyO3 binding and the existing Python dataclass API
 
 Elliptical cones, elliptical cylinders, sheared placements, and unsupported
 surface/curve types are rejected rather than approximated.
@@ -38,7 +40,8 @@ The CadQuery converter is installed with the default dependencies:
 python -m pip install cq-acis
 ```
 
-For a source checkout:
+For a source checkout, install Rust (1.83 or newer) and a C linker first.
+The native extension is built by maturin:
 
 ```bash
 python -m pip install -e .
@@ -70,6 +73,94 @@ shape = result.val()
 assert shape.isValid()
 print(shape.Volume())
 ```
+
+## Shared model for external decoders
+
+`cq_acis.model` provides `AcisModel`, `AcisMetadata`, and the geometry/entity
+types independently of SAT framing. External decoders can construct
+`AcisModel(metadata=..., entities=...)` directly; a `SatHeader`, `SatEntityGraph`,
+or text `SatRecord` is not required. The same `to_cadquery()` and new
+`convert_model()` functions accept both this model and the existing `SatModel`.
+
+For existing SAT callers:
+
+```python
+from pathlib import Path
+from cq_acis import convert_model, parse_sat_model
+
+sat_model = parse_sat_model(Path("model.sat").read_bytes())
+model = sat_model.as_acis_model()
+shapes = convert_model(model)
+
+assert model.metadata == sat_model.metadata
+assert model.entities is sat_model.entities
+# Existing access to sat_model.graph and raw.record still works.
+```
+
+Adapter contracts:
+
+- Use contiguous, zero-based model indices for `EntityRef`; `-1` is null.
+  Keep source record IDs in `RawEntity.entity_id`. Construction validates
+  indices and reference closure, not geometry or source-format compatibility.
+- Put length units and tolerances in `AcisMetadata`: `units_mm` is millimetres
+  per source unit, `resabs` uses source length units, and `resnor` is
+  dimensionless. Missing source values remain `None`. For compatibility, the
+  converter still defaults missing units to 1 mm and missing absolute tolerance
+  to 1e-6 source units; external decoders should supply known values explicitly.
+- Preserve source encoding, save version, producer and dialect in metadata.
+  The application year and kernel save version are separate values.
+- A `RawEntity` can omit `record` and instead retain binary `raw_data` and a
+  `SourceSpan(source_id, start_offset, end_offset)`. Spans are half-open byte
+  ranges in the named domain, including decompressed streams where applicable.
+- Keep unknown entities as `RawEntity` and adapter reports in
+  `AcisModel.diagnostics` (`AcisDiagnostic`). Unsupported geometry referenced
+  by a converted body raises `CadQueryConversionError`; an undecoded raw body
+  is also rejected. Other retained records and diagnostics are not proof of
+  complete conversion and should be inspected by callers.
+
+All existing public entity imports and the `SatModel(graph, entities)`
+constructor remain available. SAT framing and schema decoding are still Python;
+SAB/ASM binary decoding now runs in Rust; Inventor CFB/RSe extraction is implemented
+in the separate `inventor-kit` project. See [binary support](docs/sab-support.md).
+
+## Rust core and Python boundary
+
+[`crates/acis-core`](crates/acis-core) owns all 14 typed entity variants, raw
+values, metadata, diagnostics, reference validation/resolution, vector math,
+ellipse/cone evaluation, and transform calculations. It can be a direct Cargo
+dependency of an Inventor decoder without Python or CadQuery. See its
+[README](crates/acis-core/README.md) for a local dependency example.
+
+[`crates/cq-acis-py`](crates/cq-acis-py) provides the [PyO3](https://pyo3.rs/)
+boundary. The Python dataclasses preserve constructors, imports, equality,
+`dataclasses.replace`, and the identity of existing model entities. Their math
+and `AcisModel` validation/resolution call Rust. No Python fallback silently
+substitutes for a missing extension; build/install it before running from source.
+
+For a model owned entirely by Rust:
+
+```python
+native = model.to_native()  # Immutable snapshot; no SAT serialization/reparsing.
+assert native.to_model() == model
+shapes = convert_model(native)
+```
+
+`NativeModel` implements the converter's model interface. Its properties and
+`to_model()` create Python dataclasses with equal values, without retaining
+Python entity objects or their identities. The CadQuery adapter materializes
+this Python view once per converter, avoiding repeated field copies during
+topology traversal. Conversion copies fields directly,
+including bytes and arbitrary-precision source integers; it does not use JSON.
+Model references fit signed 64-bit indices, with `-1` for null, while offsets
+and lengths fit the native address range. Invalid source spans and dangling
+diagnostic targets are also rejected. Unknown entity classes/values must be
+represented by `RawEntity`/bytes instead of being silently dropped.
+
+The [maturin](https://www.maturin.rs/project_layout.html) build creates a mixed
+Python/Rust wheel with the CPython stable ABI for Python 3.10+. Wheel installation
+does not need Rust; source installation does. CadQuery's own platform/Python
+requirements still apply. An abi3 tag alone does not demonstrate testing on
+every Python version or operating system.
 
 ## Example and visual inspection
 
@@ -122,14 +213,19 @@ redistributing third-party files.
 
 ## Testing
 
-Run the full test suite from a source checkout:
+Run the full test suite from a source checkout, with its virtual environment active:
 
 ```bash
+python -m pip install maturin
+maturin develop
+cargo test -p acis-core --locked
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
 The pinned corpus currently covers 25 artifacts, including 23 SAT files and 2
 SAB files. CadQuery regression tests convert 23 SAT artifacts and 147 bodies.
+Native tests round-trip all 62,530 entities through Rust and cover SAT-free
+geometry, source bytes/integers, model validation, and Python API compatibility.
 
 ## Project status
 
@@ -141,3 +237,8 @@ subset may change while broader producer/version coverage is added.
 The project code is licensed under the [MIT License](LICENSE). Third-party
 corpus files have separate notices under [`corpus/licenses/`](corpus/licenses/);
 consult those notices before redistribution.
+
+## SAB / ASM (stage 3)
+
+`parse_sab_model(data, source_id="model.sab")` decodes the admitted binary
+profiles directly through Rust. See [bounded support and history limitations](docs/sab-support.md).

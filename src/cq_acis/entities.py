@@ -2,340 +2,39 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Callable, TypeAlias, overload
 
+from .model import (
+    AcisContainer,
+    AcisMetadata,
+    AcisModel,
+    BodyEntity,
+    CoedgeEntity,
+    ConeSurfaceEntity,
+    DecodedEntity,
+    EdgeEntity,
+    EllipseCurveEntity,
+    FaceEntity,
+    LoopEntity,
+    LumpEntity,
+    ModelEntity,
+    ParameterRange,
+    PlaneSurfaceEntity,
+    PointEntity,
+    ShellEntity,
+    StraightCurveEntity,
+    SupportedEntity,
+    TransformEntity,
+    Vec3,
+    VertexEntity,
+)
 from .graph import RawEntity, SatEntityGraph, SatGraphError, parse_sat_graph
 from .tokens import CountedString, EntityRef, NULL_REF, SatToken
 
 
 class EntityDecodeError(SatGraphError):
     """Raised when a supported entity does not match its expected SAT schema."""
-
-
-@dataclass(frozen=True, slots=True)
-class Vec3:
-    x: float
-    y: float
-    z: float
-
-    def cross(self, other: Vec3) -> Vec3:
-        return Vec3(
-            self.y * other.z - self.z * other.y,
-            self.z * other.x - self.x * other.z,
-            self.x * other.y - self.y * other.x,
-        )
-
-    def dot(self, other: Vec3) -> float:
-        return self.x * other.x + self.y * other.y + self.z * other.z
-
-    def __neg__(self) -> Vec3:
-        return Vec3(-self.x, -self.y, -self.z)
-
-    def __add__(self, other: Vec3) -> Vec3:
-        return Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
-
-    def __sub__(self, other: Vec3) -> Vec3:
-        return Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
-
-    def __mul__(self, scalar: float) -> Vec3:
-        return Vec3(self.x * scalar, self.y * scalar, self.z * scalar)
-
-    def __rmul__(self, scalar: float) -> Vec3:
-        return self * scalar
-
-    @property
-    def magnitude(self) -> float:
-        return math.sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
-
-    def normalized(self) -> Vec3:
-        magnitude = self.magnitude
-        if magnitude == 0.0:
-            raise ValueError("cannot normalize a zero-length vector")
-        return self * (1.0 / magnitude)
-
-
-@dataclass(frozen=True, slots=True)
-class ParameterRange:
-    """A parameter range where ``None`` represents an infinite bound."""
-
-    lower: float | None
-    upper: float | None
-
-
-@dataclass(frozen=True, slots=True)
-class DecodedEntity:
-    raw: RawEntity
-
-    @property
-    def index(self) -> int:
-        return self.raw.index
-
-    @property
-    def attributes(self) -> EntityRef:
-        return self.raw.attributes
-
-    @property
-    def entity_id(self) -> int | None:
-        return self.raw.entity_id
-
-
-@dataclass(frozen=True, slots=True)
-class BodyEntity(DecodedEntity):
-    pattern: EntityRef
-    lump: EntityRef
-    wire: EntityRef
-    transform: EntityRef
-
-
-@dataclass(frozen=True, slots=True)
-class LumpEntity(DecodedEntity):
-    pattern: EntityRef
-    next_lump: EntityRef
-    shell: EntityRef
-    body: EntityRef
-
-
-@dataclass(frozen=True, slots=True)
-class ShellEntity(DecodedEntity):
-    pattern: EntityRef
-    next_shell: EntityRef
-    subshell: EntityRef
-    face: EntityRef
-    wire: EntityRef
-    lump: EntityRef
-
-
-@dataclass(frozen=True, slots=True)
-class FaceEntity(DecodedEntity):
-    pattern: EntityRef
-    next_face: EntityRef
-    loop: EntityRef
-    shell: EntityRef
-    subshell: EntityRef
-    surface: EntityRef
-    reversed: bool
-    double_sided: bool
-    containment_in: bool | None
-
-
-@dataclass(frozen=True, slots=True)
-class LoopEntity(DecodedEntity):
-    pattern: EntityRef
-    next_loop: EntityRef
-    coedge: EntityRef
-    face: EntityRef
-
-
-@dataclass(frozen=True, slots=True)
-class CoedgeEntity(DecodedEntity):
-    pattern: EntityRef
-    next_coedge: EntityRef
-    previous_coedge: EntityRef
-    partner_coedge: EntityRef
-    edge: EntityRef
-    reversed: bool
-    loop: EntityRef
-    pcurve: EntityRef
-
-
-@dataclass(frozen=True, slots=True)
-class EdgeEntity(DecodedEntity):
-    pattern: EntityRef
-    start_vertex: EntityRef
-    start_parameter: float | None
-    end_vertex: EntityRef
-    end_parameter: float | None
-    coedge: EntityRef
-    curve: EntityRef
-    reversed: bool
-    convexity: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class VertexEntity(DecodedEntity):
-    pattern: EntityRef
-    edge: EntityRef
-    point: EntityRef
-
-
-@dataclass(frozen=True, slots=True)
-class PointEntity(DecodedEntity):
-    pattern: EntityRef
-    location: Vec3
-
-
-@dataclass(frozen=True, slots=True)
-class StraightCurveEntity(DecodedEntity):
-    pattern: EntityRef
-    origin: Vec3
-    direction: Vec3
-    parameter_range: ParameterRange | None
-
-
-@dataclass(frozen=True, slots=True)
-class EllipseCurveEntity(DecodedEntity):
-    pattern: EntityRef
-    center: Vec3
-    normal: Vec3
-    major_axis: Vec3
-    ratio: float
-    parameter_range: ParameterRange | None
-
-    @property
-    def major_radius(self) -> float:
-        return self.major_axis.magnitude
-
-    @property
-    def minor_radius(self) -> float:
-        return self.major_radius * abs(self.ratio)
-
-    @property
-    def minor_axis(self) -> Vec3:
-        return self.normal.normalized().cross(self.major_axis) * self.ratio
-
-    def is_circle(self, tolerance: float = 1e-12) -> bool:
-        return math.isclose(abs(self.ratio), 1.0, abs_tol=tolerance, rel_tol=0.0)
-
-    def evaluate(self, parameter: float) -> Vec3:
-        return (
-            self.center
-            + self.major_axis * math.cos(parameter)
-            + self.minor_axis * math.sin(parameter)
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class PlaneSurfaceEntity(DecodedEntity):
-    pattern: EntityRef
-    origin: Vec3
-    normal: Vec3
-    u_direction: Vec3
-    reverse_v: bool
-    u_range: ParameterRange | None
-    v_range: ParameterRange | None
-
-    @property
-    def v_direction(self) -> Vec3:
-        direction = self.normal.cross(self.u_direction)
-        return -direction if self.reverse_v else direction
-
-
-@dataclass(frozen=True, slots=True)
-class ConeSurfaceEntity(DecodedEntity):
-    pattern: EntityRef
-    center: Vec3
-    axis: Vec3
-    major_axis: Vec3
-    ratio: float
-    profile_range: ParameterRange | None
-    sin_half_angle: float
-    cos_half_angle: float
-    reference_radius: float
-    reversed: bool
-    u_range: ParameterRange | None
-    v_range: ParameterRange | None
-
-    @property
-    def major_direction(self) -> Vec3:
-        return self.major_axis.normalized()
-
-    @property
-    def minor_direction(self) -> Vec3:
-        return self.axis.normalized().cross(self.major_direction)
-
-    @property
-    def minor_radius(self) -> float:
-        return self.reference_radius * abs(self.ratio)
-
-    def is_cylinder(self, tolerance: float = 1e-12) -> bool:
-        return math.isclose(self.sin_half_angle, 0.0, abs_tol=tolerance)
-
-    def is_circular(self, tolerance: float = 1e-12) -> bool:
-        return math.isclose(abs(self.ratio), 1.0, abs_tol=tolerance, rel_tol=0.0)
-
-    def radius_at(self, v_parameter: float) -> float:
-        return self.reference_radius + v_parameter * self.sin_half_angle
-
-    @property
-    def apex(self) -> Vec3 | None:
-        if self.is_cylinder():
-            return None
-        axial_offset = (
-            self.reference_radius * self.cos_half_angle / self.sin_half_angle
-        )
-        return self.center - self.axis.normalized() * axial_offset
-
-    def evaluate(self, u_parameter: float, v_parameter: float) -> Vec3:
-        axis = self.axis.normalized()
-        radial = (
-            self.major_direction * math.cos(u_parameter)
-            + self.minor_direction * (self.ratio * math.sin(u_parameter))
-        )
-        return (
-            self.center
-            + axis * (v_parameter * self.cos_half_angle)
-            + radial * self.radius_at(v_parameter)
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class TransformEntity(DecodedEntity):
-    matrix_values: tuple[float, ...]
-    scale: float
-    rotated: bool
-    reflected: bool
-    sheared: bool
-
-    @property
-    def linear_determinant(self) -> float:
-        values = self.matrix_values
-        determinant = (
-            values[0] * (values[4] * values[8] - values[5] * values[7])
-            - values[1] * (values[3] * values[8] - values[5] * values[6])
-            + values[2] * (values[3] * values[7] - values[4] * values[6])
-        )
-        return self.scale**3 * determinant
-
-    def transform_vector(self, vector: Vec3) -> Vec3:
-        """Apply the linear part of the ACIS row-vector placement."""
-
-        values = self.matrix_values
-        return Vec3(
-            self.scale
-            * (vector.x * values[0] + vector.y * values[3] + vector.z * values[6]),
-            self.scale
-            * (vector.x * values[1] + vector.y * values[4] + vector.z * values[7]),
-            self.scale
-            * (vector.x * values[2] + vector.y * values[5] + vector.z * values[8]),
-        )
-
-    def transform_point(self, point: Vec3) -> Vec3:
-        """Apply ``world = scale * (point * matrix) + translation``."""
-
-        transformed = self.transform_vector(point)
-        values = self.matrix_values
-        return transformed + Vec3(values[9], values[10], values[11])
-
-
-SupportedEntity: TypeAlias = (
-    BodyEntity
-    | LumpEntity
-    | ShellEntity
-    | FaceEntity
-    | LoopEntity
-    | CoedgeEntity
-    | EdgeEntity
-    | VertexEntity
-    | PointEntity
-    | StraightCurveEntity
-    | EllipseCurveEntity
-    | PlaneSurfaceEntity
-    | ConeSurfaceEntity
-    | TransformEntity
-)
-ModelEntity: TypeAlias = SupportedEntity | RawEntity
 
 
 class _EntityReader:
@@ -755,6 +454,25 @@ def decode_entity(graph: SatEntityGraph, raw: RawEntity) -> ModelEntity:
 class SatModel:
     graph: SatEntityGraph
     entities: tuple[ModelEntity, ...]
+
+    @property
+    def metadata(self) -> AcisMetadata:
+        """Expose source facts without requiring consumers to read SAT headers."""
+        header = self.graph.header
+        return AcisMetadata(
+            units_mm=header.units_mm,
+            resabs=header.resabs,
+            resnor=header.resnor,
+            container=AcisContainer.SAT,
+            save_version=header.save_version,
+            product_id=header.product_id,
+            modeler_version=header.modeler_version,
+            creation_date=header.creation_date,
+        )
+
+    def as_acis_model(self) -> AcisModel:
+        """Share decoded entities and original record attachments without reparsing."""
+        return AcisModel(self.metadata, self.entities)
 
     def __len__(self) -> int:
         return len(self.entities)

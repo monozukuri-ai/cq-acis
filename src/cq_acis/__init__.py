@@ -1,5 +1,16 @@
-"""Low-level ACIS container and SAT parsing helpers."""
+"""Shared ACIS models, SAT parsing, and optional CadQuery conversion."""
 
+from ._native import NativeModel
+from .sab import parse_sab_model
+from .model import (
+    AcisDiagnostic,
+    AcisMetadata,
+    AcisModel,
+    AcisModelError,
+    AcisModelView,
+    AcisValue,
+    SourceSpan,
+)
 from .sat import (
     AcisContainer,
     SatDocument,
@@ -48,6 +59,7 @@ from .cadquery import (
     CadQueryConversionError,
     CadQueryConverter,
     CadQueryDependencyError,
+    convert_model,
     convert_sat_model,
     import_sat_data,
     import_sat_file,
@@ -55,6 +67,14 @@ from .cadquery import (
 )
 
 __all__ = [
+    "parse_sab_model",
+    "NativeModel",
+    "AcisDiagnostic",
+    "AcisMetadata",
+    "AcisModel",
+    "AcisModelError",
+    "AcisModelView",
+    "AcisValue",
     "AcisContainer",
     "BodyEntity",
     "CadQueryConversionError",
@@ -87,10 +107,12 @@ __all__ = [
     "SatToken",
     "ShellEntity",
     "StraightCurveEntity",
+    "SourceSpan",
     "TransformEntity",
     "Vec3",
     "VertexEntity",
     "build_entity_graph",
+    "convert_model",
     "convert_sat_model",
     "decode_entity",
     "decode_sat_model",
