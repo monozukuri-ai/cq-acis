@@ -242,3 +242,10 @@ consult those notices before redistribution.
 
 `parse_sab_model(data, source_id="model.sab")` decodes the admitted binary
 profiles directly through Rust. See [bounded support and history limitations](docs/sab-support.md).
+
+## Python release CI
+
+Publishing a GitHub Release tagged `v<pyproject version>` builds and validates
+Linux, Windows, macOS ARM64/Intel ABI3 wheels and an sdist, then publishes to PyPI
+with Trusted Publishing. Manual workflow runs build and verify without uploading.
+See [release setup, versioning, and retry instructions](docs/releasing.md).
