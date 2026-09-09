@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def installed_smoke(corpus: Path) -> None:
+    print(f'Checking installed cq-acis {importlib.metadata.version("cq-acis")} on {sys.version}', flush=True)
     import cq_acis
     from cq_acis import _native, parse_sat_model, parse_sab_model, to_cadquery
 
@@ -33,20 +34,26 @@ def installed_smoke(corpus: Path) -> None:
         assert solid.isValid()
         assert (len(solid.Solids()), len(solid.Faces()), len(solid.Edges()), len(solid.Vertices())) == (1, 6, 12, 8)
         assert abs(solid.Volume() - 777**3) < 1e-3
-    print(f'Installed cq-acis {importlib.metadata.version("cq-acis")} native SAT/SAB/CadQuery smoke passed on {sys.version}')
+    print('Native SAT/SAB/CadQuery assertions passed; checking interpreter shutdown', flush=True)
 
 
 def clean_install(wheel: Path, interpreter: str) -> None:
     with tempfile.TemporaryDirectory(prefix='cq-acis-wheel-') as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         environment = dict(os.environ)
         for name in ('PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'):
             environment.pop(name, None)
         subprocess.run([interpreter, '-m', 'venv', str(root / 'venv')], check=True, env=environment)
         python = root / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-        subprocess.run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', str(wheel)], check=True, env=environment)
+        # Select versions with published wheels (notably Numba/llvmlite on Intel
+        # macOS) instead of attempting to build native dependencies from source.
+        subprocess.run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', str(wheel)], check=True, env=environment)
         subprocess.run([str(python), '-m', 'pip', 'check'], check=True, env=environment)
-        subprocess.run([str(python), '-I', str(Path(__file__).resolve()), '--installed', '--corpus', str(ROOT / 'corpus')], cwd=root, check=True, env=environment)
+        subprocess.run([str(python), '-m', 'pip', 'list', '--format=freeze'], check=True, env=environment)
+        subprocess.run([str(python), '-I', '-X', 'faulthandler', '-u', str(Path(__file__).resolve()), '--installed', '--corpus', str(ROOT / 'corpus')], cwd=root, check=True, env=environment)
+        # Native dependencies can crash after all assertions pass. Only the
+        # parent can confirm that interpreter shutdown also succeeded.
+        print(f'Wheel smoke passed, including interpreter shutdown ({interpreter})', flush=True)
 
 
 def main() -> None:

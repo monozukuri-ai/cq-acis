@@ -24,6 +24,21 @@ and a valid CadQuery cube are checked outside the source checkout. The sdist is
 also rebuilt and installed in an isolated environment. The source regression
 suite and Rust checks must pass before packaging starts.
 
+The clean installs require binary wheels for all dependencies. This lets pip
+select a compatible Numba/llvmlite release on Intel macOS, where newer releases
+no longer provide wheels, without requiring an LLVM development installation.
+Resolved dependency versions are logged. A smoke test succeeds only after its
+child interpreter exits normally; passing the CAD assertions alone is not enough.
+
+On Windows the package metadata pins `casadi==3.7.2` and `nlopt==2.11.0` to keep
+their SWIG runtime tables separate. Other combinations can corrupt the heap at
+interpreter shutdown after `import cadquery`, even when geometry checks pass
+([CasADi issue #4403](https://github.com/casadi/casadi/issues/4403),
+[CadQuery issue #1564](https://github.com/CadQuery/cadquery/issues/1564)). These
+constraints apply to end-user installs as well as CI. Revisit them when fixed
+upstream Windows wheels are available and verify a normal process exit on both
+Python 3.10 and 3.11 before removing them.
+
 Only verified files are collected in the final `publish` job. That job alone
 has `id-token: write`. It uses PyPI Trusted Publishing; no long-lived API token
 or Rust publication token is needed. Third-party notices and licenses are checked
