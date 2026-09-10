@@ -207,9 +207,9 @@ Rustで直接解析します。[対応範囲と履歴の制限](docs/sab-support
 
 ## Python リリース CI
 
-`v<pyproject のバージョン>` の GitHub Release を公開すると、Linux・Windows・
+`v<Cargo.toml の workspace.package.version>` の GitHub Release を公開すると、Linux・Windows・
 macOS ARM64/Intel の ABI3 wheel と sdist をビルド・検証し、Trusted Publishing で
 PyPI に公開します。手動実行はビルドと検証のみです。
-PyPI の `cq-acis 0.1.0` は公開済みなので、次回は新しいパッケージバージョンを
-設定してください。Rust の `acis-core` のバージョンとは独立して管理できます。
+0.3.2以降はPythonパッケージとRustの各crateで同じバージョンを使います。
+PythonのバージョンはCargoの設定から自動取得し、個別の番号は設定しません。
 初回の PyPI 設定と公開手順は [リリース手順](docs/releasing.md) を参照してください。

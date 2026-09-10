@@ -35,9 +35,10 @@ NURBS profile, proved cone-apex degeneracies, circular sphere holes, and
 elliptical-cone isosections. Other native spline profiles and non-similarity
 placements remain unsupported. Projected 2D trims are numerically checked against unchanged 3D
 curves at source precision. See [M4 scope and validation](docs/m4-geometry.md).
-The 0.3.1 development version adds partial tolerant topology and nested subtype
-views while keeping model API 2, and requires core/bridge 0.2.1;
-registry-only releases require their separate publication first.
+Partial tolerant topology and nested subtype views keep model API 2.
+From 0.3.2, `cq-acis`, `acis-core`, and `acis-py-bridge` share the workspace
+version. Python builds bundle the matching core and bridge sources; downstream
+Rust consumers require those crates to be published to crates.io.
 
 ## Installation
 
@@ -253,7 +254,8 @@ profiles directly through Rust. See [bounded support and history limitations](do
 
 ## Python release CI
 
-Publishing a GitHub Release tagged `v<pyproject version>` builds and validates
+Publishing a GitHub Release tagged `v<workspace.package.version>` builds and validates
 Linux, Windows, macOS ARM64/Intel ABI3 wheels and an sdist, then publishes to PyPI
 with Trusted Publishing. Manual workflow runs build and verify without uploading.
+The Python version is read from `Cargo.toml` through maturin's dynamic metadata.
 See [release setup, versioning, and retry instructions](docs/releasing.md).

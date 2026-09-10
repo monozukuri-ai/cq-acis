@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cq-acis"
-version = "0.3.1"
+dynamic = ["version"]
 description = "ACIS SAT/SAB parsing experiments for CadQuery"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,15 @@ include = [
     { path = "README.ja.md", format = "sdist" },
 ]
 exclude = ["corpus/**", "tests/**", "examples/**"]
+
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "crates/**/Cargo.toml" },
+    { file = "crates/**/*.rs" },
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -359,7 +359,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(vector, module)?)?;
     module.add_function(wrap_pyfunction!(vector_scalar, module)?)?;
     module.add_function(wrap_pyfunction!(geometry, module)?)?;
-    module.add("CORE_VERSION", "0.2.1")?;
+    module.add("CORE_VERSION", env!("CARGO_PKG_VERSION"))?;
     module.add("MODEL_API_VERSION", acis_py_bridge::MODEL_API_VERSION)?;
     Ok(())
 }

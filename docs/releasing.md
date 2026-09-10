@@ -1,25 +1,28 @@
 # Python releases
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds and
-publishes the **Python `cq-acis` distribution**. The `acis-core` Rust crate has
-its own publication lifecycle. Python builds use the pinned `acis-core` release
-from crates.io and the checked-out `acis-py-bridge`. The bridge source is included
-in the sdist, so source installs need no sibling checkout or separate bridge
-publication.
+publishes the **Python `cq-acis` distribution**. From 0.3.2, the Python package and
+all Rust crates use `[workspace.package].version` in the root `Cargo.toml`.
+Every crate inherits that version, and `pyproject.toml` uses
+[`dynamic = ["version"]`](https://www.maturin.rs/metadata.html#dynamic-metadata)
+so maturin reads the Rust version. Release checks reject independent package
+versions and stale workspace dependency pins.
 
-Keep `Cargo.lock` resolved without local `[patch.crates-io]` overrides. The
-workspace tests its own `acis-core` source as well as using the registry crate
-through the Python binding, so the lockfile contains both package identities.
-An ignored `.cargo/config.toml` override can remove the registry entry when Cargo
-updates the lockfile; that file then fails CI's `--locked` builds. Run the release
-checks in a clean checkout without such overrides. If the lockfile needs repair,
-regenerate it there with `cargo generate-lockfile`, review the dependency changes,
-and commit the corrected `Cargo.lock` before tagging the release.
+Python builds use the matching workspace `acis-core` and `acis-py-bridge`.
+Both sources are included in the sdist, so Python source installs need no sibling
+checkout or prior Rust crate publication. Rust consumers using crates.io require
+`acis-core` to be published first, followed by `acis-py-bridge` at the same version.
+The Python release workflow does not publish Rust crates.
+
+Run release checks in a clean checkout without local `[patch.crates-io]`
+overrides. Refresh `Cargo.lock` after changing versions and retain `--locked`
+in builds. The workspace path dependencies keep the core tested by Rust and the
+core linked into Python identical, including before publication.
 
 ## Triggers and artifacts
 
 - Publishing a GitHub Release starts validation, builds, and PyPI publication.
-  Its tag must be exactly `v<project.version>` from `pyproject.toml`.
+  Its tag must be exactly `v<workspace.package.version>` from `Cargo.toml`.
 - Pushing a tag alone does not publish. The workflow must be present in the
   tagged commit when the GitHub Release is published.
 - **Run workflow** (`workflow_dispatch`) performs the same build and verification
@@ -75,19 +78,23 @@ protections still apply. See [PyPI's setup instructions](https://docs.pypi.org/t
 
 ## Cutting the next release
 
-At implementation time (2026-09-09), [PyPI `cq-acis` 0.1.0](https://pypi.org/project/cq-acis/0.1.0/)
-already contains the earlier pure Python wheel and source archive. Select a **new
-Python version** for the Rust-backed release; do not reuse `v0.1.0`.
+Choose a new shared version unused on both crates.io and PyPI. The failed
+`v0.3.1` tag predates these fixes; the next release is `v0.3.2`.
 
-1. Update `[project].version` in `pyproject.toml` and refresh `uv.lock` with
-   `uv lock`. The Python release version does not need to match the Rust workspace
-   version: publishing a new Python binding does not require republishing an
-   unchanged `acis-core` crate.
+1. In the root `Cargo.toml`, update `[workspace.package].version` and the two
+   exact version pins under `[workspace.dependencies]` to the same number.
+   Run `cargo generate-lockfile` and `uv lock`, then
+   `python scripts/check_python_release.py --tag v0.3.2` using the new version.
+   No Python version field needs editing. The uv cache keys include the Cargo
+   manifests so Rust version changes invalidate cached Python build metadata.
 2. Commit the version/lockfile and workflow changes. Run **Python release**
    manually to review artifacts before publishing.
-3. Create the matching tag, then publish a GitHub Release for that tag. For example,
-   Python version `0.1.1` uses tag `v0.1.1`.
-4. Check the final **Publish verified distributions to PyPI** job. A successful
+3. For a coordinated Rust release, publish `acis-core` and then `acis-py-bridge`
+   at the new version. Downstream Rust projects must update their exact pins
+   after these packages are available on crates.io.
+4. Create the matching tag, then publish a GitHub Release for that tag. For example,
+   workspace version `0.3.2` uses tag `v0.3.2`.
+5. Check the final **Publish verified distributions to PyPI** job. A successful
    build or manual workflow run alone does not mean a package was published.
 
 Before any upload, the workflow compares existing PyPI filenames and SHA-256
@@ -106,7 +113,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python -m unittest discover -s scripts/tests -v
-python scripts/check_python_release.py --tag v0.3.1  # use the checkout's version
+python scripts/check_python_release.py --tag v0.3.2  # use the checkout's version
 maturin build --release --locked --out wheel-check
 maturin sdist --out sdist-check
 python scripts/check_python_release.py --dist wheel-check

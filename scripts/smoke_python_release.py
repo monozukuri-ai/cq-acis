@@ -19,6 +19,7 @@ def installed_smoke(corpus: Path) -> None:
     import cq_acis
     from cq_acis import _native, parse_sat_model, parse_sab_model, to_cadquery
 
+    assert _native.CORE_VERSION == importlib.metadata.version('cq-acis')
     for module in (cq_acis, _native):
         path = Path(module.__file__).resolve()
         if not path.is_relative_to(Path(sys.prefix).resolve()):

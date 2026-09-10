@@ -16,8 +16,20 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def project_version() -> str:
-    return tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+def project_version(root: Path = ROOT) -> str:
+    workspace = tomllib.loads((root / 'Cargo.toml').read_text(encoding='utf-8'))['workspace']
+    version = workspace['package']['version']
+    project = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']
+    if 'version' in project or 'version' not in project.get('dynamic', []):
+        raise ValueError('Python version must be inherited from Cargo via project.dynamic')
+    for member in workspace['members']:
+        package = tomllib.loads((root / member / 'Cargo.toml').read_text(encoding='utf-8'))['package']
+        if package.get('version') != {'workspace': True}:
+            raise ValueError(f'{package["name"]} must inherit workspace.package.version')
+    for name in ('acis-core', 'acis-py-bridge'):
+        if workspace['dependencies'][name]['version'] != f'={version}':
+            raise ValueError(f'{name} dependency must be pinned to ={version}')
+    return version
 
 
 def check_tag(tag: str, version: str) -> None:
@@ -28,7 +40,7 @@ def check_tag(tag: str, version: str) -> None:
 def metadata(data: bytes, version: str) -> None:
     parsed = BytesParser().parsebytes(data)
     if parsed['Name'] != 'cq-acis' or parsed['Version'] != version:
-        raise ValueError('Artifact name/version does not match pyproject.toml')
+        raise ValueError('Artifact name/version does not match the workspace release')
 
 
 def check_archives(directory: Path, version: str, wheels: int, sdists: int) -> dict[str, str]:
@@ -55,7 +67,8 @@ def check_archives(directory: Path, version: str, wheels: int, sdists: int) -> d
             with tarfile.open(path) as archive:
                 names = archive.getnames()
                 prefix = f'cq_acis-{version}/'
-                required = ['pyproject.toml', 'Cargo.lock', 'crates/acis-py-bridge/src/lib.rs',
+                required = ['pyproject.toml', 'Cargo.toml', 'Cargo.lock', 'crates/acis-core/src/lib.rs',
+                            'crates/acis-py-bridge/src/lib.rs',
                             'crates/cq-acis-py/src/lib.rs', 'src/cq_acis/__init__.py', 'PKG-INFO']
                 if any(prefix + member not in names for member in required):
                     raise ValueError('Source distribution is missing a required build input')
