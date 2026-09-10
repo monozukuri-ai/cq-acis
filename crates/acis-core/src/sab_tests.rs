@@ -311,6 +311,79 @@ fn explicit_curve_values() -> Vec<AcisValue> {
         F(1.),
     ]
 }
+
+#[test]
+fn subtype_alias_uses_nested_definition_and_its_own_envelope() {
+    use AcisValue::{Bytes as B, Float as F, Integer as I, Reference as R, String as S};
+    let direct = explicit_curve_values();
+    let end = direct.iter().position(|v| *v == B(vec![16])).unwrap() + 1;
+    let mut owner = RawEntity::new(0, "pcurve");
+    owner.values = vec![
+        R(EntityRef(-1)),
+        I(0.into()),
+        B(vec![11]),
+        B(vec![15]),
+        S("exp_par_cur".into()),
+    ];
+    owner.values.extend_from_slice(&direct[2..end]);
+    owner.values.push(B(vec![16]));
+    let mut alias = RawEntity::new(1, "intcurve-curve");
+    alias.values = vec![
+        R(EntityRef(-1)),
+        B(vec![11]),
+        B(vec![15]),
+        S("ref".into()),
+        I(1.into()),
+        B(vec![16]),
+        B(vec![10]),
+        F(0.2),
+        B(vec![10]),
+        F(0.8),
+    ];
+    alias.raw_data = Some(vec![1, 2, 3]);
+    let model = AcisModel::new(
+        AcisMetadata {
+            save_version: Some(22700.into()),
+            ..Default::default()
+        },
+        vec![Entity::Raw(owner), Entity::Raw(alias.clone())],
+        vec![],
+    )
+    .unwrap();
+    let resolved = crate::subtypes::SubtypeResolver::new(std::sync::Arc::new(model.clone()))
+        .resolve(alias.index)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.definition.index, 1);
+    assert_eq!(resolved.definition.parent, Some(0));
+    let Entity::BSplineCurve(curve) = resolved.geometry else {
+        panic!()
+    };
+    assert_eq!(curve.raw, alias);
+    assert_eq!(curve.parameter_range.unwrap().lower, Some(0.2));
+    let p = curve.evaluate(0.5).unwrap();
+    assert!((p.x - 0.5_f64.sqrt()).abs() < 1e-12);
+    assert!((p.y - 0.5_f64.sqrt()).abs() < 1e-12);
+    let mut reversed = alias.clone();
+    reversed.values[1] = B(vec![10]);
+    let mut wrong_kind = alias.clone();
+    wrong_kind.type_name = "spline-surface".into();
+    let mut wrong_target = alias;
+    wrong_target.values[4] = I(0.into());
+    for bad in [reversed, wrong_kind, wrong_target] {
+        let bad_model = AcisModel::new(
+            model.metadata().clone(),
+            vec![model.entities()[0].clone(), Entity::Raw(bad)],
+            vec![],
+        )
+        .unwrap();
+        assert!(
+            crate::subtypes::SubtypeResolver::new(std::sync::Arc::new(bad_model))
+                .resolve(1)
+                .is_err()
+        );
+    }
+}
 fn encode_values(values: &[AcisValue], width: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     for value in values {

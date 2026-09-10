@@ -1,6 +1,10 @@
 """Shared ACIS models, SAT parsing, and optional CadQuery conversion."""
 
 from ._native import NativeModel
+from .extensions import (
+    TolerantVertex, TolerantEdge, TolerantCoedge, SubtypeDefinition,
+    SubtypeReference, SubtypeTable, ResolvedSubtype,
+)
 from .sab import parse_sab_model
 from .model import (
     AcisDiagnostic,
@@ -71,6 +75,8 @@ from .cadquery import (
 )
 
 __all__ = [
+    "TolerantVertex", "TolerantEdge", "TolerantCoedge", "SubtypeDefinition",
+    "SubtypeReference", "SubtypeTable", "ResolvedSubtype",
     "parse_sab_model",
     "NativeModel",
     "AcisDiagnostic",

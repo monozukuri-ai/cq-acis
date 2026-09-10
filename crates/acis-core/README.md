@@ -30,7 +30,7 @@ assert_eq!(model.resolve(EntityRef(0))?.unwrap().index(), 0);
 # Ok::<(), acis_core::ModelError>(())
 ```
 
-`Entity` includes all 14 decoded entity types used by cq-acis and a `Raw`
+`Entity` includes typed topology and geometry used by cq-acis and a `Raw`
 variant. Its fields retain topology links, analytic parameters, source records,
 byte ranges, and optional uninterpreted bytes. `AcisModel` validates contiguous
 indices, closure of raw and typed references, source ranges, and diagnostic
@@ -63,3 +63,10 @@ parameter scale, and bounded explicit clamped NURBS surface evaluation / SAT 700
 from saved ACIS charts. Explicit clamped curves and the experimental ASM 22700 /
 embedded 22601 forward direct NURBS profile are also supported, only with the
 qualified default trailers. Other procedural ASM spline records remain opaque.
+
+Version 0.2.1 adds `tolerant::decode` partial topology views and
+`subtypes::SubtypeResolver`, an index bound to an immutable source model.
+Neither changes `Entity` or discards raw records. The observed ASM 22700 views
+preserve unknown scalar semantics, refuse unknown layouts, and resolve only
+existing qualified explicit spline geometry. Subtype definitions retain their
+owner and token extent; unknown scopes stop subsequent reliable numbering.

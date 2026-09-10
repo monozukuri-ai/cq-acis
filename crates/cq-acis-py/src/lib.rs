@@ -11,7 +11,7 @@ use pyo3::{
     types::{PyBytes, PyTuple},
     IntoPyObjectExt,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 pyo3::import_exception!(cq_acis.model, AcisModelError);
 fn model_error(message: impl ToString) -> PyErr {
     AcisModelError::new_err(message.to_string())
@@ -35,6 +35,7 @@ fn optional_to_py<'py, T>(
 #[pyclass(frozen, module = "cq_acis._native")]
 pub struct NativeModel {
     inner: Arc<AcisModel>,
+    subtypes: OnceLock<acis_core::subtypes::SubtypeResolver>,
 }
 
 // Kept as a Rust re-export for existing downstream source users.
@@ -55,6 +56,7 @@ fn parse_sab_model(data: &Bound<'_, PyBytes>, source_id: &str) -> PyResult<Nativ
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(NativeModel {
         inner: Arc::new(result.model),
+        subtypes: OnceLock::new(),
     })
 }
 
@@ -79,10 +81,57 @@ impl NativeModel {
     fn from_model(model: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(Self {
             inner: Arc::new(model_from_python(model)?),
+            subtypes: OnceLock::new(),
         })
     }
     fn __len__(&self) -> usize {
         self.inner.len()
+    }
+    /// Partial view; never changes the raw entity or the model tolerance.
+    fn tolerant_topology<'py>(&self, reference: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = reference.py();
+        let Some(entity) = self
+            .inner
+            .resolve(reference_from_python(reference)?)
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        let version = self
+            .inner
+            .metadata()
+            .save_version
+            .as_ref()
+            .and_then(|v| v.to_string().parse().ok())
+            .unwrap_or(0);
+        let view = acis_core::tolerant::decode(entity.raw(), version).map_err(model_error)?;
+        optional_to_py(py, view.as_ref(), acis_py_bridge::tolerant_to_python)
+    }
+    #[getter]
+    fn subtype_table<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let table = self
+            .subtypes
+            .get_or_init(|| acis_core::subtypes::SubtypeResolver::new(Arc::clone(&self.inner)));
+        acis_py_bridge::subtype_table_to_python(py, table.table())
+    }
+    fn resolve_subtype<'py>(&self, reference: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = reference.py();
+        let Some(entity) = self
+            .inner
+            .resolve(reference_from_python(reference)?)
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        let resolver = self
+            .subtypes
+            .get_or_init(|| acis_core::subtypes::SubtypeResolver::new(Arc::clone(&self.inner)));
+        let resolved = resolver.resolve(entity.index()).map_err(model_error)?;
+        optional_to_py(
+            py,
+            resolved.as_ref(),
+            acis_py_bridge::resolved_subtype_to_python,
+        )
     }
     fn __repr__(&self) -> String {
         format!(
@@ -310,7 +359,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(vector, module)?)?;
     module.add_function(wrap_pyfunction!(vector_scalar, module)?)?;
     module.add_function(wrap_pyfunction!(geometry, module)?)?;
-    module.add("CORE_VERSION", "0.2.0")?;
+    module.add("CORE_VERSION", "0.2.1")?;
     module.add("MODEL_API_VERSION", acis_py_bridge::MODEL_API_VERSION)?;
     Ok(())
 }

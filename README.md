@@ -35,7 +35,8 @@ NURBS profile, proved cone-apex degeneracies, circular sphere holes, and
 elliptical-cone isosections. Other native spline profiles and non-similarity
 placements remain unsupported. Projected 2D trims are numerically checked against unchanged 3D
 curves at source precision. See [M4 scope and validation](docs/m4-geometry.md).
-The 0.3.0 development series requires model API 2 and the new core/bridge 0.2.0;
+The 0.3.1 development version adds partial tolerant topology and nested subtype
+views while keeping model API 2, and requires core/bridge 0.2.1;
 registry-only releases require their separate publication first.
 
 ## Installation

@@ -223,7 +223,39 @@ class CadQueryConverter:
         self.pcurve_max_deviation = 0.0
         self.degenerate_edges: list[dict] = []
         self.analytic_trim_faces: list[dict] = []
+        self.tolerant_endpoints: list[dict] = []
+        self.resolved_subtypes: list[dict] = []
+        self.subtype_failures: dict[int, str] = {}
+        self._extension_native = None
+        self._geometry_cache = {}
         self.pcurve_count = 0
+
+    def _native_extensions(self):
+        if self._extension_native is None:
+            self._extension_native = NativeModel.from_model(self.model)
+        return self._extension_native
+
+    def _resolve_geometry(self, reference):
+        entity = self.model.resolve(reference)
+        if not isinstance(entity, RawEntity):
+            return entity
+        if entity.index not in self._geometry_cache:
+            from .model import AcisModelError
+            resolved = None
+            try:
+                resolved = self._native_extensions().resolve_subtype(reference)
+            except AcisModelError as error:
+                self.subtype_failures[entity.index] = str(error)
+            self._geometry_cache[entity.index] = resolved.geometry if resolved else entity
+            if resolved:
+                definition = resolved.definition
+                self.resolved_subtypes.append({
+                    'entity': entity.index, 'subtype': definition.index,
+                    'definition_entity': definition.entity_index,
+                    'definition_value_start': definition.value_start,
+                    'definition_value_end': definition.value_end,
+                })
+        return self._geometry_cache[entity.index]
 
     def _require(
         self,
@@ -483,7 +515,7 @@ class CadQueryConverter:
         edge = self._require(
             coedge.edge, EdgeEntity, context=f"coedge ${coedge.index}"
         )
-        curve = self.model.resolve(edge.curve)
+        curve = self._resolve_geometry(edge.curve)
         if isinstance(curve, StraightCurveEntity):
             return self._straight_edge(edge, coedge, placement)
         if isinstance(curve, EllipseCurveEntity):
@@ -532,10 +564,32 @@ class CadQueryConverter:
                 raise CadQueryConversionError("B-spline trim outside saved domain",
                                               code="geometry.spline_parameter_unsupported")
             point = placement.point_vector(curve.evaluate(parameter))
-            expected = placement.point_vector(self._vertex_location(vertex, context="B-spline endpoint"))
-            if (point - expected).magnitude > self.tolerance:
+            from .extensions import TolerantVertex
+            from .model import AcisModelError
+            tolerant = None
+            if isinstance(self.model.resolve(vertex), RawEntity):
+                try:
+                    tolerant = self._native_extensions().tolerant_topology(vertex)
+                except AcisModelError as error:
+                    raise CadQueryConversionError(str(error), code="geometry.tolerant_topology_unsupported") from error
+            if isinstance(tolerant, TolerantVertex):
+                source_point = self._require(tolerant.vertex.point, PointEntity, context="tolerant vertex point")
+                location = source_point.location
+            else:
+                location = self._vertex_location(vertex, context="B-spline endpoint")
+            expected = placement.point_vector(location)
+            deviation = (point - expected).magnitude
+            if not math.isfinite(deviation) or deviation > self.tolerance:
                 raise CadQueryConversionError(f"edge ${edge.index}: spline endpoint disagrees with source vertex",
                                               code="geometry.spline_endpoint_mismatch")
+            if isinstance(tolerant, TolerantVertex):
+                self.tolerant_endpoints.append({
+                    'vertex': vertex.index, 'edge': edge.index, 'coedge': coedge.index,
+                    'curve': curve.index, 'parameter': parameter,
+                    'deviation_mm': deviation, 'tolerance_mm': self.tolerance,
+                    'saved_scalars_source_units': tolerant.saved_scalars,
+                    'method': 'saved spline endpoint matches saved point within model resabs',
+                })
         def array(values, cls):
             result = cls(1, len(values))
             for i, value in enumerate(values, 1):
@@ -751,7 +805,7 @@ class CadQueryConverter:
             edge = self._require(
                 coedges[0].edge, EdgeEntity, context=f"loop ${loop.index}"
             )
-            curve = self.model.resolve(edge.curve)
+            curve = self._resolve_geometry(edge.curve)
             if (
                 not isinstance(curve, EllipseCurveEntity)
                 or edge.start_vertex.index != edge.end_vertex.index
@@ -842,7 +896,7 @@ class CadQueryConverter:
         for loop in loops:
             coedge = self._coedges(loop)[0]
             edge = self._require(coedge.edge, EdgeEntity, context="elliptical cone")
-            curve = self.model.resolve(edge.curve)
+            curve = self._resolve_geometry(edge.curve)
             center = placement.point_vector(curve.center)
             delta = center - geometry.center
             axial = delta.dot(geometry.axis)
@@ -902,7 +956,7 @@ class CadQueryConverter:
             edge = self._require(coedge.edge, EdgeEntity, context=f"loop ${loop.index}")
             if edge.start_vertex != edge.end_vertex:
                 return None
-            curve = self.model.resolve(edge.curve)
+            curve = self._resolve_geometry(edge.curve)
             if curve is None:
                 nulls.append((coedge, edge))
             elif isinstance(curve, EllipseCurveEntity) and curve.is_circle():
@@ -1091,7 +1145,7 @@ class CadQueryConverter:
                 return None
             coedge = coedges[0]
             edge = self._require(coedge.edge, EdgeEntity, context="sphere boundary")
-            curve = self.model.resolve(edge.curve)
+            curve = self._resolve_geometry(edge.curve)
             if (not isinstance(curve, EllipseCurveEntity) or not curve.is_circle()
                     or edge.start_vertex != edge.end_vertex):
                 return None
@@ -1194,7 +1248,7 @@ class CadQueryConverter:
         return self._reverse_face(result) if face.reversed != surface.reversed else result
 
     def _face(self, face: FaceEntity, placement: _Placement):
-        surface = self.model.resolve(face.surface)
+        surface = self._resolve_geometry(face.surface)
         if not isinstance(surface, (PlaneSurfaceEntity, ConeSurfaceEntity, SphereSurfaceEntity, TorusSurfaceEntity, BSplineSurfaceEntity)):
             if surface is None:
                 actual = "null"

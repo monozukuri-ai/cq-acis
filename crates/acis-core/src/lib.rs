@@ -10,6 +10,8 @@ pub mod entities;
 pub mod geometry;
 pub mod nurbs;
 pub mod sab;
+pub mod subtypes;
+pub mod tolerant;
 pub use entities::*;
 pub use geometry::{GeometryError, Vec3};
 pub use num_bigint::BigInt;
