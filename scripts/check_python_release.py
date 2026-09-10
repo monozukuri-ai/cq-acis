@@ -55,7 +55,7 @@ def check_archives(directory: Path, version: str, wheels: int, sdists: int) -> d
             with tarfile.open(path) as archive:
                 names = archive.getnames()
                 prefix = f'cq_acis-{version}/'
-                required = ['pyproject.toml', 'Cargo.lock', 'crates/acis-core/src/sab.rs',
+                required = ['pyproject.toml', 'Cargo.lock', 'crates/acis-py-bridge/src/lib.rs',
                             'crates/cq-acis-py/src/lib.rs', 'src/cq_acis/__init__.py', 'PKG-INFO']
                 if any(prefix + member not in names for member in required):
                     raise ValueError('Source distribution is missing a required build input')

@@ -4,12 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "cq-acis"
-version = "0.2.0"
+version = "0.3.0"
 description = "ACIS SAT/SAB parsing experiments for CadQuery"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "cadquery>=2.4",
+    "cadquery>=2.8",
     # These Windows wheels use different SWIG runtime tables. Loading versions
     # that share a table can corrupt the heap during interpreter shutdown.
     # https://github.com/casadi/casadi/issues/4403
@@ -26,6 +26,7 @@ module-name = "cq_acis._native"
 features = ["pyo3/extension-module"]
 include = [
     { path = "docs/sab-support.md", format = ["sdist", "wheel"] },
+    { path = "docs/m4-geometry.md", format = ["sdist", "wheel"] },
     { path = "README.ja.md", format = "sdist" },
 ]
 exclude = ["corpus/**", "tests/**", "examples/**"]

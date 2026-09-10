@@ -20,17 +20,23 @@ CadQuery/OpenCascade shapes.
 - Typed topology and analytic geometry entities:
   `body`, `lump`, `shell`, `face`, `loop`, `coedge`, `edge`, `vertex`,
   `point`, `straight-curve`, `ellipse-curve`, `plane-surface`,
-  `cone-surface`, and `transform`
+  `cone-surface`, `sphere-surface`, `torus-surface`, and `transform`
 - Exact CadQuery conversion for line, circular/elliptical edge, plane,
-  cylindrical, and circular-conical geometry
+  cylindrical (including elliptical), circular-conical and qualified sphere/torus geometry
 - Splitting of non-manifold ACIS shells into valid CadQuery solids and
   compounds
 - Preservation of unsupported records as `RawEntity`
 - Reusable Rust `acis-core` models, reference validation, and analytic helpers,
   with a PyO3 binding and the existing Python dataclass API
 
-Elliptical cones, elliptical cylinders, sheared placements, and unsupported
-surface/curve types are rejected rather than approximated.
+M4 adds an experimental explicit SAT 700 `exactsur` NURBS surface adapter.
+It also admits an experimental ASM 22700 / embedded 22601 direct explicit
+NURBS profile, proved cone-apex degeneracies, circular sphere holes, and
+elliptical-cone isosections. Other native spline profiles and non-similarity
+placements remain unsupported. Projected 2D trims are numerically checked against unchanged 3D
+curves at source precision. See [M4 scope and validation](docs/m4-geometry.md).
+The 0.3.0 development series requires model API 2 and the new core/bridge 0.2.0;
+registry-only releases require their separate publication first.
 
 ## Installation
 

@@ -5,8 +5,10 @@
 //! compatibility with a particular Inventor/ASM version.
 #![doc = include_str!("../README.md")]
 
+mod asm_nurbs;
 pub mod entities;
 pub mod geometry;
+pub mod nurbs;
 pub mod sab;
 pub use entities::*;
 pub use geometry::{GeometryError, Vec3};

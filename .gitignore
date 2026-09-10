@@ -11,3 +11,6 @@ target/
 *.pyd
 
 examples/output/
+
+# Explicit local registry overrides; never ship developer paths.
+.cargo/

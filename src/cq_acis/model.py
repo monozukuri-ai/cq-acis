@@ -14,6 +14,9 @@ from typing import Iterator, Protocol, TypeAlias, overload
 
 from . import _native
 
+# Dataclass layout shared with acis-py-bridge; independent of package versions.
+MODEL_API_VERSION = 2
+
 
 class AcisContainer(str, Enum):
     """Source encoding; identifying an encoding does not decode it."""
@@ -355,6 +358,11 @@ class PlaneSurfaceEntity(DecodedEntity):
 
 @dataclass(frozen=True, slots=True)
 class ConeSurfaceEntity(DecodedEntity):
+    """Cone with geometric radius and separately retained serialized chart scale.
+
+    ``evaluate(u, v)`` uses angle u and generator distance v, independent of
+    the serialized ACIS parameter scale, ranges and reversed flag.
+    """
     pattern: EntityRef
     center: Vec3
     axis: Vec3
@@ -364,6 +372,7 @@ class ConeSurfaceEntity(DecodedEntity):
     sin_half_angle: float
     cos_half_angle: float
     reference_radius: float
+    parameter_scale: float
     reversed: bool
     u_range: ParameterRange | None
     v_range: ParameterRange | None
@@ -418,6 +427,90 @@ class TransformEntity(DecodedEntity):
         return _native.geometry(self, "transform_point", (point.x, point.y, point.z))
 
 
+@dataclass(frozen=True, slots=True)
+class SphereSurfaceEntity(DecodedEntity):
+    pattern: EntityRef
+    center: Vec3
+    radius: float
+    pole: Vec3
+    u_direction: Vec3
+    reversed: bool
+    u_range: ParameterRange | None
+    v_range: ParameterRange | None
+
+    def evaluate(self, u: float, v: float) -> Vec3:
+        """Evaluate the canonical longitude/latitude (sphere) or ring/tube chart.
+
+        Saved ACIS ranges are retained separately and are not interpreted as this chart.
+        """
+        return _native.geometry(self, "evaluate", (u, v))
+
+
+@dataclass(frozen=True, slots=True)
+class TorusSurfaceEntity(DecodedEntity):
+    pattern: EntityRef
+    center: Vec3
+    axis: Vec3
+    major_radius: float
+    minor_radius: float
+    u_direction: Vec3
+    reversed: bool
+    u_range: ParameterRange | None
+    v_range: ParameterRange | None
+
+    def evaluate(self, u: float, v: float) -> Vec3:
+        """Evaluate the canonical longitude/latitude (sphere) or ring/tube chart.
+
+        Saved ACIS ranges are retained separately and are not interpreted as this chart.
+        """
+        return _native.geometry(self, "evaluate", (u, v))
+
+
+@dataclass(frozen=True, slots=True)
+class BSplineCurveEntity(DecodedEntity):
+    """Explicit clamped non-periodic curve; evaluate uses its saved parameter."""
+    pattern: EntityRef
+    degree: int
+    knots: tuple[float, ...]
+    multiplicities: tuple[int, ...]
+    poles: tuple[Vec3, ...]
+    weights: tuple[float, ...]
+    parameter_range: ParameterRange | None
+    fit_tolerance: float
+
+    def evaluate(self, parameter: float) -> Vec3:
+        return _native.geometry(self, "evaluate", (parameter,))
+
+    def validate(self) -> None:
+        _native.geometry(self, "validate", ())
+
+
+@dataclass(frozen=True, slots=True)
+class BSplineSurfaceEntity(DecodedEntity):
+    """Explicit clamped non-periodic surface; poles are indexed v * u_count + u."""
+    pattern: EntityRef
+    u_degree: int
+    v_degree: int
+    u_knots: tuple[float, ...]
+    v_knots: tuple[float, ...]
+    u_multiplicities: tuple[int, ...]
+    v_multiplicities: tuple[int, ...]
+    u_count: int
+    v_count: int
+    poles: tuple[Vec3, ...]
+    weights: tuple[float, ...]
+    reversed: bool
+    u_range: ParameterRange | None
+    v_range: ParameterRange | None
+    fit_tolerance: float
+
+    def evaluate(self, u: float, v: float) -> Vec3:
+        return _native.geometry(self, "evaluate", (u, v))
+
+    def validate(self) -> None:
+        _native.geometry(self, "validate", ())
+
+
 SupportedEntity: TypeAlias = (
     BodyEntity
     | LumpEntity
@@ -432,6 +525,10 @@ SupportedEntity: TypeAlias = (
     | EllipseCurveEntity
     | PlaneSurfaceEntity
     | ConeSurfaceEntity
+    | SphereSurfaceEntity
+    | TorusSurfaceEntity
+    | BSplineSurfaceEntity
+    | BSplineCurveEntity
     | TransformEntity
 )
 ModelEntity: TypeAlias = SupportedEntity | RawEntity

@@ -13,6 +13,10 @@ from .model import (
     AcisModelView,
     BodyEntity,
     ConeSurfaceEntity,
+    BSplineSurfaceEntity,
+    BSplineCurveEntity,
+    TorusSurfaceEntity,
+    SphereSurfaceEntity,
     CoedgeEntity,
     DecodedEntity,
     EdgeEntity,
@@ -40,7 +44,11 @@ class CadQueryDependencyError(ImportError):
 
 
 class CadQueryConversionError(RuntimeError):
-    """Raised when a decoded SAT model cannot be converted without approximation."""
+    """A classified conversion failure; unsupported geometry is never dropped."""
+
+    def __init__(self, message: str, *, code: str = "geometry.conversion_failed"):
+        super().__init__(message)
+        self.code = code
 
 
 EntityT = TypeVar("EntityT", bound=DecodedEntity)
@@ -59,7 +67,17 @@ class _Placement:
 
     @property
     def preserves_circles(self) -> bool:
-        return self.transform is None or not self.transform.sheared
+        if self.transform is None:
+            return True
+        if self.transform.sheared:
+            return False
+        basis = [self.transform.transform_vector(v) for v in
+                 (Vec3(1, 0, 0), Vec3(0, 1, 0), Vec3(0, 0, 1))]
+        size = basis[0].magnitude
+        return size > 0 and all(math.isclose(v.magnitude, size, rel_tol=1e-9)
+                                for v in basis) and all(
+            abs(basis[i].dot(basis[j])) <= 1e-9 * size * size
+            for i in range(3) for j in range(i))
 
     def vector(self, vector: Vec3) -> Vec3:
         transformed = (
@@ -136,7 +154,47 @@ class _ConeGeometry(_CylinderGeometry):
         u_parameter = math.atan2(
             radial.dot(self.y_direction), radial.dot(self.x_direction)
         )
-        return u_parameter, v_parameter
+        return u_parameter, v_parameter / self.cos_half_angle
+
+
+@dataclass(frozen=True, slots=True)
+class _EllipseCylinderGeometry(_CylinderGeometry):
+    minor_radius: float
+
+    def uv(self, point: Vec3) -> tuple[float, float]:
+        relative = point - self.center
+        x = relative.dot(self.x_direction) / self.radius
+        y = relative.dot(self.y_direction) / self.minor_radius
+        u, v = math.atan2(y, x), relative.dot(self.axis)
+        actual = self.surface.Value(u, v)
+        if (Vec3(actual.X(), actual.Y(), actual.Z()) - point).magnitude > 10 * self.tolerance:
+            raise CadQueryConversionError("elliptical cylinder boundary is off surface", code="geometry.pcurve_mismatch")
+        return u, v
+
+
+@dataclass(frozen=True, slots=True)
+class _SphereGeometry(_CylinderGeometry):
+    def uv(self, point: Vec3) -> tuple[float, float]:
+        relative = point - self.center
+        if abs(relative.magnitude - self.radius) > self.tolerance * 10:
+            raise CadQueryConversionError("sphere boundary is off surface", code="geometry.pcurve_mismatch")
+        x, y, z = (relative.dot(d) for d in (self.x_direction, self.y_direction, self.axis))
+        if math.hypot(x, y) <= self.tolerance:
+            raise CadQueryConversionError("sphere pole requires a degenerate pcurve", code="geometry.singular_pcurve_unsupported")
+        return math.atan2(y, x), math.atan2(z, math.hypot(x, y))
+
+
+@dataclass(frozen=True, slots=True)
+class _TorusGeometry(_CylinderGeometry):
+    minor_radius: float
+
+    def uv(self, point: Vec3) -> tuple[float, float]:
+        relative = point - self.center
+        x, y, z = (relative.dot(d) for d in (self.x_direction, self.y_direction, self.axis))
+        radial = math.hypot(x, y) - self.radius
+        if abs(math.hypot(radial, z) - self.minor_radius) > self.tolerance * 10:
+            raise CadQueryConversionError("torus boundary is off surface", code="geometry.pcurve_mismatch")
+        return math.atan2(y, x), math.atan2(z, radial)
 
 
 def _load_cadquery():
@@ -162,6 +220,10 @@ class CadQueryConverter:
         self.cq = _load_cadquery()
         unit_scale = model.metadata.units_mm or 1.0
         self.tolerance = (model.metadata.resabs or 1e-6) * unit_scale
+        self.pcurve_max_deviation = 0.0
+        self.degenerate_edges: list[dict] = []
+        self.analytic_trim_faces: list[dict] = []
+        self.pcurve_count = 0
 
     def _require(
         self,
@@ -179,7 +241,10 @@ class CadQueryConverter:
             else:
                 actual = entity.raw.type_name
             raise CadQueryConversionError(
-                f"{context}: expected {expected_type.__name__}, got {actual}"
+                f"{context}: expected {expected_type.__name__}, got {actual}",
+                code="geometry.tolerant_topology_unsupported" if actual in
+                ("tvertex-vertex", "tedge-edge", "tcoedge-coedge", "tolerant-vertex", "tolerant-edge", "tolerant-coedge")
+                else "geometry.conversion_failed"
             )
         return entity
 
@@ -308,7 +373,8 @@ class CadQueryConverter:
         )
         relative = point - curve.center
         return math.atan2(
-            relative.dot(minor_direction), relative.dot(major_direction)
+            relative.dot(minor_direction) / curve.minor_radius,
+            relative.dot(major_direction) / curve.major_radius
         )
 
     def _ellipse_edge_parameters(
@@ -422,129 +488,152 @@ class CadQueryConverter:
             return self._straight_edge(edge, coedge, placement)
         if isinstance(curve, EllipseCurveEntity):
             return self._ellipse_edge(edge, coedge, curve, placement)
+        if isinstance(curve, BSplineCurveEntity):
+            return self._bspline_edge(edge, coedge, curve, placement)
         if curve is None:
-            actual = "null"
+            start = self._vertex_location(edge.start_vertex, context=f"edge ${edge.index} start")
+            end = self._vertex_location(edge.end_vertex, context=f"edge ${edge.index} end")
+            collapsed = (placement.point_vector(start) - placement.point_vector(end)).magnitude <= self.tolerance
+            raise CadQueryConversionError(
+                f"edge ${edge.index}: null curve with {'coincident' if collapsed else 'distinct'} vertices; "
+                "a singular surface and its pcurve must establish degeneracy",
+                code="geometry.null_curve_coincident" if collapsed else "geometry.null_curve_distinct")
         elif isinstance(curve, RawEntity):
             actual = curve.type_name
         else:
             actual = curve.raw.type_name
         raise CadQueryConversionError(
-            f"edge ${edge.index} curve: unsupported geometry {actual}"
+            f"edge ${edge.index} curve: unsupported geometry {actual}", code="geometry.curve_unsupported"
         )
 
-    def _attach_surface_pcurves(
-        self, edges: tuple, geometry: _CylinderGeometry, *, loop_index: int
-    ) -> None:
-        from OCP.BRep import BRep_Builder
+    def _bspline_edge(self, edge, coedge, curve, placement):
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.Geom import Geom_BSplineCurve
+        from OCP.TColgp import TColgp_Array1OfPnt
+        from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+        from OCP.gp import gp_Pnt
+        curve.validate()
+        if curve.fit_tolerance > (self.model.metadata.resabs or 1e-6):
+            raise CadQueryConversionError("B-spline fit tolerance exceeds model precision",
+                                          code="geometry.spline_fit_tolerance")
+        if edge.start_parameter is None or edge.end_parameter is None:
+            raise CadQueryConversionError("B-spline edge needs saved endpoint parameters",
+                                          code="geometry.spline_parameter_unsupported")
+        sign = -1 if edge.reversed else 1
+        start, end = sign * edge.start_parameter, sign * edge.end_parameter
+        if not math.isfinite(start + end) or sign * (end - start) <= 0:
+            raise CadQueryConversionError("invalid B-spline edge interval",
+                                          code="geometry.spline_parameter_unsupported")
+        for parameter, vertex in ((start, edge.start_vertex), (end, edge.end_vertex)):
+            if (parameter < curve.knots[0] or parameter > curve.knots[-1]
+                    or (curve.parameter_range is not None and (
+                        (curve.parameter_range.lower is not None and parameter < curve.parameter_range.lower)
+                        or (curve.parameter_range.upper is not None and parameter > curve.parameter_range.upper)))):
+                raise CadQueryConversionError("B-spline trim outside saved domain",
+                                              code="geometry.spline_parameter_unsupported")
+            point = placement.point_vector(curve.evaluate(parameter))
+            expected = placement.point_vector(self._vertex_location(vertex, context="B-spline endpoint"))
+            if (point - expected).magnitude > self.tolerance:
+                raise CadQueryConversionError(f"edge ${edge.index}: spline endpoint disagrees with source vertex",
+                                              code="geometry.spline_endpoint_mismatch")
+        def array(values, cls):
+            result = cls(1, len(values))
+            for i, value in enumerate(values, 1):
+                result.SetValue(i, value)
+            return result
+        try:
+            ocp = Geom_BSplineCurve(
+                array([gp_Pnt(*placement.point(p)) for p in curve.poles], TColgp_Array1OfPnt),
+                array(curve.weights, TColStd_Array1OfReal), array(curve.knots, TColStd_Array1OfReal),
+                array(curve.multiplicities, TColStd_Array1OfInteger), curve.degree, False)
+            builder = BRepBuilderAPI_MakeEdge(ocp, min(start, end), max(start, end))
+            if not builder.IsDone():
+                raise ValueError("B-spline edge construction failed")
+            result = self.cq.Edge(builder.Edge())
+        except Exception as error:
+            raise CadQueryConversionError("OCCT B-spline edge construction failed") from error
+        return self._reverse_edge(result) if edge.reversed ^ coedge.reversed else result
+
+    def _attach_surface_pcurves(self, edges: tuple, geometry, *, loop_index: int) -> None:
+        """Derive UV trims from unchanged 3D curves, within the source tolerance."""
+        from OCP.Adaptor3d import Adaptor3d_CurveOnSurface
+        from OCP.BRep import BRep_Builder, BRep_Tool
         from OCP.BRepAdaptor import BRepAdaptor_Curve
-        from OCP.Geom2d import Geom2d_Line
+        from OCP.Geom2dAdaptor import Geom2dAdaptor_Curve
+        from OCP.GeomAdaptor import GeomAdaptor_Curve, GeomAdaptor_Surface
+        from OCP.GeomLib import GeomLib_CheckCurveOnSurface
+        from OCP.GeomProjLib import GeomProjLib
         from OCP.TopAbs import TopAbs_REVERSED
         from OCP.TopLoc import TopLoc_Location
-        from OCP.gp import gp_Dir2d, gp_Pnt2d
+        from OCP.gp import gp_Vec2d
 
-        previous_end: tuple[float, float] | None = None
-        loop_start: tuple[float, float] | None = None
+        surface = geometry.surface
+        periods = (surface.UPeriod() if surface.IsUPeriodic() else None,
+                   surface.VPeriod() if surface.IsVPeriodic() else None)
+        previous_end = None
+        loop_start = None
         location = TopLoc_Location()
-        parameter_tolerance = geometry.tolerance / max(geometry.radius, 1.0)
-
+        parameter_tolerance = self.tolerance / max(geometry.radius, 1.0)
         for edge in edges:
             adaptor = BRepAdaptor_Curve(edge.wrapped)
-            first = adaptor.FirstParameter()
-            last = adaptor.LastParameter()
-            if not math.isfinite(first) or not math.isfinite(last) or last <= first:
-                raise CadQueryConversionError(
-                    f"loop ${loop_index}: invalid edge parameter range"
-                )
-
-            samples: list[tuple[float, float, float]] = []
-            for sample_index in range(9):
-                parameter = first + (last - first) * sample_index / 8.0
-                point = adaptor.Value(parameter)
-                u_parameter, v_parameter = geometry.uv(
-                    Vec3(point.X(), point.Y(), point.Z())
-                )
-                if samples:
-                    previous_u = samples[-1][1]
-                    u_parameter = previous_u + (
-                        (u_parameter - previous_u + math.pi) % (2.0 * math.pi)
-                        - math.pi
-                    )
-                samples.append((parameter, u_parameter, v_parameter))
-
-            parameter_span = last - first
-            du = (samples[-1][1] - samples[0][1]) / parameter_span
-            dv = (samples[-1][2] - samples[0][2]) / parameter_span
-            derivative_length = math.hypot(du, dv)
-            if not math.isclose(
-                derivative_length, 1.0, abs_tol=1e-6, rel_tol=1e-6
-            ):
-                raise CadQueryConversionError(
-                    f"loop ${loop_index}: boundary is not an isoparametric "
-                    "cylinder curve"
-                )
-            du /= derivative_length
-            dv /= derivative_length
-
-            for parameter, actual_u, actual_v in samples:
-                offset = parameter - first
-                expected_u = samples[0][1] + du * offset
-                expected_v = samples[0][2] + dv * offset
-                if (
-                    abs(actual_u - expected_u) > parameter_tolerance * 10.0
-                    or abs(actual_v - expected_v) > geometry.tolerance * 10.0
-                ):
+            first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+            if not math.isfinite(first + last) or last <= first:
+                raise CadQueryConversionError("invalid boundary parameter range")
+            curve = BRep_Tool.Curve_s(edge.wrapped, first, last)
+            try:
+                pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, self.tolerance * 0.1)
+                if pcurve is None:
+                    raise ValueError("projection returned no curve")
+                start, end = pcurve.Value(first), pcurve.Value(last)
+                uv_start, uv_end = [start.X(), start.Y()], [end.X(), end.Y()]
+                if edge.wrapped.Orientation() == TopAbs_REVERSED:
+                    uv_start, uv_end = uv_end, uv_start
+                shift = [0., 0.]
+                if previous_end is not None:
+                    for d, period in enumerate(periods):
+                        if period is not None:
+                            shift[d] = round((previous_end[d] - uv_start[d]) / period) * period
+                        if abs(previous_end[d] - uv_start[d] - shift[d]) > parameter_tolerance * 10:
+                            raise CadQueryConversionError(
+                                f"loop ${loop_index}: projected pcurves do not connect",
+                                code="geometry.pcurve_connection")
+                pcurve.Translate(gp_Vec2d(*shift))
+                # OCCT's projector can return an approximation and its output
+                # tolerance is not exposed by the Python binding. Independently
+                # bound same-parameter deviation before attaching that curve.
+                check = GeomLib_CheckCurveOnSurface(GeomAdaptor_Curve(curve, first, last))
+                check.Perform(Adaptor3d_CurveOnSurface(
+                    Geom2dAdaptor_Curve(pcurve, first, last), GeomAdaptor_Surface(surface)))
+                if not check.IsDone() or not math.isfinite(check.MaxDistance()) or check.MaxDistance() > self.tolerance:
                     raise CadQueryConversionError(
-                        f"loop ${loop_index}: cylinder pcurve is not linear"
-                    )
-
-            reversed_edge = edge.wrapped.Orientation() == TopAbs_REVERSED
-            oriented_start = samples[-1][1:3] if reversed_edge else samples[0][1:3]
-            oriented_end = samples[0][1:3] if reversed_edge else samples[-1][1:3]
-            shift = 0.0
-            if previous_end is not None:
-                shift = round(
-                    (previous_end[0] - oriented_start[0]) / (2.0 * math.pi)
-                ) * (2.0 * math.pi)
-                if abs(previous_end[1] - oriented_start[1]) > geometry.tolerance * 10.0:
-                    raise CadQueryConversionError(
-                        f"loop ${loop_index}: cylinder pcurves do not connect"
-                    )
-
-            origin_u = samples[0][1] + shift - du * first
-            origin_v = samples[0][2] - dv * first
-            pcurve = Geom2d_Line(
-                gp_Pnt2d(origin_u, origin_v), gp_Dir2d(du, dv)
-            )
-            builder = BRep_Builder()
-            builder.UpdateEdge(
-                edge.wrapped,
-                pcurve,
-                geometry.surface,
-                location,
-                geometry.tolerance,
-            )
-            builder.Range(edge.wrapped, geometry.surface, location, first, last)
-            builder.SameRange(edge.wrapped, True)
-            builder.SameParameter(edge.wrapped, True)
-
-            oriented_start = (oriented_start[0] + shift, oriented_start[1])
-            oriented_end = (oriented_end[0] + shift, oriented_end[1])
-            if loop_start is None:
-                loop_start = oriented_start
-            previous_end = oriented_end
-
-        assert loop_start is not None and previous_end is not None
-        closing_u = (
-            (previous_end[0] - loop_start[0] + math.pi) % (2.0 * math.pi)
-            - math.pi
-        )
-        if (
-            abs(closing_u) > parameter_tolerance * 10.0
-            or abs(previous_end[1] - loop_start[1]) > geometry.tolerance * 10.0
-        ):
-            raise CadQueryConversionError(
-                f"loop ${loop_index}: cylinder pcurves do not close"
-            )
+                        f"loop ${loop_index}: projected 2D/3D curves exceed source tolerance",
+                        code="geometry.pcurve_mismatch")
+                self.pcurve_max_deviation = max(self.pcurve_max_deviation, check.MaxDistance())
+                self.pcurve_count += 1
+                builder = BRep_Builder()
+                builder.UpdateEdge(edge.wrapped, pcurve, surface, location, self.tolerance)
+                builder.Range(edge.wrapped, surface, location, first, last)
+                builder.SameRange(edge.wrapped, True)
+                builder.SameParameter(edge.wrapped, True)
+                uv_start = [uv_start[d] + shift[d] for d in range(2)]
+                uv_end = [uv_end[d] + shift[d] for d in range(2)]
+                if loop_start is None:
+                    loop_start = uv_start
+                previous_end = uv_end
+            except CadQueryConversionError:
+                raise
+            except Exception as error:
+                raise CadQueryConversionError(
+                    f"loop ${loop_index}: boundary projection failed", code="geometry.pcurve_projection") from error
+        if previous_end is None or loop_start is None:
+            raise CadQueryConversionError("empty boundary")
+        for d, period in enumerate(periods):
+            delta = previous_end[d] - loop_start[d]
+            if period is not None:
+                delta = (delta + period / 2) % period - period / 2
+            if abs(delta) > parameter_tolerance * 10:
+                raise CadQueryConversionError(
+                    f"loop ${loop_index}: projected pcurves do not close", code="geometry.pcurve_connection")
 
     def _wire(
         self,
@@ -583,21 +672,25 @@ class CadQueryConverter:
     def _cone_geometry(
         self, face: FaceEntity, surface: ConeSurfaceEntity, placement: _Placement
     ) -> _ConeGeometry:
-        if not surface.is_circular():
+        if not surface.is_circular() and not surface.is_cylinder():
             raise CadQueryConversionError(
-                f"face ${face.index}: elliptical cylinders are not supported"
-            )
+                f"face ${face.index}: elliptical cones require a qualified rational surface",
+                code="geometry.elliptical_cone_unsupported")
+        if (surface.parameter_scale <= 0 or surface.reference_radius <= 0
+            or not math.isclose(surface.sin_half_angle**2 + surface.cos_half_angle**2, 1, abs_tol=1e-9)
+            or abs(surface.cos_half_angle) <= 1e-12):
+            raise CadQueryConversionError(f"face ${face.index}: invalid cone scale/angle")
         if not placement.preserves_circles:
             raise CadQueryConversionError(
                 f"face ${face.index}: sheared cylinder/cone placement is not supported"
             )
 
-        from OCP.Geom import Geom_ConicalSurface, Geom_CylindricalSurface
-        from OCP.gp import gp_Ax3, gp_Dir, gp_Pnt
+        from OCP.Geom import Geom_ConicalSurface, Geom_CylindricalSurface, Geom_Ellipse, Geom_SurfaceOfLinearExtrusion
+        from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt
 
         center = placement.point_vector(surface.center)
         axial_direction = surface.axis * surface.cos_half_angle
-        axis = placement.oriented_direction(axial_direction)
+        axis = placement.vector(axial_direction).normalized()
         major_axis = placement.vector(surface.major_axis)
         radius = major_axis.magnitude
         x_direction = major_axis.normalized()
@@ -614,11 +707,19 @@ class CadQueryConverter:
                 gp_Dir(axis.x, axis.y, axis.z),
                 gp_Dir(x_direction.x, x_direction.y, x_direction.z),
             )
-            if surface.is_cylinder():
+            if not surface.is_circular():
+                if not 0 < abs(surface.ratio) <= 1:
+                    raise CadQueryConversionError("elliptical cylinder ratio outside (0, 1]")
+                ellipse = Geom_Ellipse(gp_Ax2(axis_system.Location(), axis_system.Direction(), axis_system.XDirection()),
+                                       radius, radius * abs(surface.ratio))
+                ocp_surface = Geom_SurfaceOfLinearExtrusion(ellipse, axis_system.Direction())
+                return _EllipseCylinderGeometry(ocp_surface, center, axis, x_direction, y_direction,
+                                                radius, self.tolerance, radius * abs(surface.ratio))
+            elif surface.is_cylinder():
                 ocp_surface = Geom_CylindricalSurface(axis_system, radius)
             else:
                 semi_angle = math.atan2(
-                    surface.sin_half_angle, surface.cos_half_angle
+                    surface.sin_half_angle, abs(surface.cos_half_angle)
                 )
                 ocp_surface = Geom_ConicalSurface(
                     axis_system, semi_angle, radius
@@ -636,7 +737,7 @@ class CadQueryConverter:
             radius,
             self.tolerance,
             surface.sin_half_angle,
-            surface.cos_half_angle,
+            abs(surface.cos_half_angle),
             radius,
         )
 
@@ -653,7 +754,6 @@ class CadQueryConverter:
             curve = self.model.resolve(edge.curve)
             if (
                 not isinstance(curve, EllipseCurveEntity)
-                or not curve.is_circle()
                 or edge.start_vertex.index != edge.end_vertex.index
             ):
                 return False
@@ -674,7 +774,12 @@ class CadQueryConverter:
         from OCP.BRepAdaptor import BRepAdaptor_Curve
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
 
+        if not surface.is_circular() and not surface.is_cylinder():
+            return self._elliptical_cone_face(face, surface, loops, placement)
         geometry = self._cone_geometry(face, surface, placement)
+        apex_face = self._cone_apex_face(face, surface, loops, placement, geometry)
+        if apex_face is not None:
+            return apex_face
         try:
             if self._is_full_revolution_face(loops):
                 wires = tuple(self._wire(loop, placement) for loop in loops)
@@ -682,11 +787,15 @@ class CadQueryConverter:
                 for wire in wires:
                     for edge in wire.Edges():
                         adaptor = BRepAdaptor_Curve(edge.wrapped)
-                        point = adaptor.Value(adaptor.FirstParameter())
-                        _, v_parameter = geometry.uv(
-                            Vec3(point.X(), point.Y(), point.Z())
-                        )
-                        v_parameters.append(v_parameter)
+                        values = []
+                        for fraction in (0, .125, .25, .375, .5, .625, .75, .875, 1):
+                            point = adaptor.Value(adaptor.FirstParameter() + fraction *
+                                                  (adaptor.LastParameter() - adaptor.FirstParameter()))
+                            _, v_parameter = geometry.uv(Vec3(point.X(), point.Y(), point.Z()))
+                            values.append(v_parameter)
+                        if max(values) - min(values) > geometry.tolerance * 10:
+                            raise CadQueryConversionError("full revolution boundary is not an isocurve")
+                        v_parameters.append(values[0])
                 lower_v = min(v_parameters)
                 upper_v = max(v_parameters)
                 builder = BRepBuilderAPI_MakeFace(
@@ -720,9 +829,373 @@ class CadQueryConverter:
             result = self._reverse_face(result)
         return result
 
+    def _elliptical_cone_face(self, face, surface, loops, placement):
+        """Two coaxial complete elliptic sections of one positive cone nappe."""
+        from dataclasses import replace
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_GTransform
+        from OCP.gp import gp_GTrsf, gp_Mat, gp_XYZ
+        if not self._is_full_revolution_face(loops) or not 0 < abs(surface.ratio) < 1:
+            raise CadQueryConversionError("elliptical cone needs two complete coaxial elliptical sections",
+                                          code="geometry.elliptical_cone_unsupported")
+        geometry = self._cone_geometry(face, replace(surface, ratio=1.), placement)
+        values = []
+        for loop in loops:
+            coedge = self._coedges(loop)[0]
+            edge = self._require(coedge.edge, EdgeEntity, context="elliptical cone")
+            curve = self.model.resolve(edge.curve)
+            center = placement.point_vector(curve.center)
+            delta = center - geometry.center
+            axial = delta.dot(geometry.axis)
+            v = axial / geometry.cos_half_angle
+            expected_radius = geometry.reference_radius + v * geometry.sin_half_angle
+            major = placement.vector(curve.major_axis)
+            normal = placement.vector(curve.normal).normalized()
+            if (expected_radius <= self.tolerance
+                    or (delta - geometry.axis * axial).magnitude > self.tolerance
+                    or abs(abs(normal.dot(geometry.axis)) - 1.) > 1e-10
+                    or abs(abs(major.normalized().dot(geometry.x_direction)) - 1.) > 1e-10
+                    or abs(major.magnitude - expected_radius) > self.tolerance
+                    or abs(abs(curve.ratio) * major.magnitude - abs(surface.ratio) * expected_radius) > self.tolerance):
+                raise CadQueryConversionError("elliptical cone boundary is not a source isosection",
+                                              code="geometry.elliptical_cone_unsupported")
+            self._edge(coedge, placement)
+            values.append(v)
+        if abs(values[1] - values[0]) <= self.tolerance:
+            raise CadQueryConversionError("elliptical cone has an empty section interval")
+        circular = BRepBuilderAPI_MakeFace(geometry.surface, 0., 2 * math.pi,
+                                          min(values), max(values), self.tolerance)
+        # An affine transform of rational conics is exact: OCCT transforms the
+        # homogeneous spline representation, without fitting sampled points.
+        y = geometry.y_direction
+        components = (y.x, y.y, y.z)
+        factor = abs(surface.ratio) - 1.
+        matrix = [(1. if i == j else 0.) + factor * components[i] * components[j]
+                  for i in range(3) for j in range(3)]
+        translation = y * (-factor * geometry.center.dot(y))
+        transform = gp_GTrsf(gp_Mat(*matrix), gp_XYZ(translation.x, translation.y, translation.z))
+        builder = BRepBuilderAPI_GTransform(circular.Face(), transform, True)
+        if not builder.IsDone():
+            raise CadQueryConversionError("elliptical cone affine construction failed")
+        faces = self.cq.Shape.cast(builder.Shape()).Faces()
+        if len(faces) != 1 or not faces[0].isValid():
+            raise CadQueryConversionError("elliptical cone affine face is invalid", code="geometry.face_invalid")
+        self.analytic_trim_faces.append({"face": face.index,
+            "method": "elliptical_cone_affine_isosections", "loops": [l.index for l in loops]})
+        return self._reverse_face(faces[0]) if face.reversed ^ surface.reversed else faces[0]
+
+    def _cone_apex_face(self, face, surface, loops, placement, geometry):
+        """A complete circular rim and one source null loop at a proven apex.
+
+        OCCT creates an explicit degenerate edge and a seam in its own chart.
+        The source edge's arbitrary null-curve parameters are not used as UV.
+        """
+        from OCP.BRep import BRep_Tool
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        if surface.is_cylinder() or not surface.is_circular() or len(loops) != 2:
+            return None
+        rings, nulls = [], []
+        for loop in loops:
+            coedges = self._coedges(loop)
+            if len(coedges) != 1:
+                return None
+            coedge = coedges[0]
+            edge = self._require(coedge.edge, EdgeEntity, context=f"loop ${loop.index}")
+            if edge.start_vertex != edge.end_vertex:
+                return None
+            curve = self.model.resolve(edge.curve)
+            if curve is None:
+                nulls.append((coedge, edge))
+            elif isinstance(curve, EllipseCurveEntity) and curve.is_circle():
+                rings.append((coedge, edge, curve))
+            else:
+                return None
+        if len(rings) != 1 or len(nulls) != 1:
+            return None
+        coedge, edge = nulls[0]
+        apex = placement.point_vector(surface.apex)
+        point = placement.point_vector(self._vertex_location(edge.start_vertex, context="cone apex"))
+        if (apex - point).magnitude > self.tolerance:
+            raise CadQueryConversionError(f"edge ${edge.index}: null loop is not at the cone apex",
+                                          code="geometry.degeneracy_unproven")
+        ring_coedge, _, curve = rings[0]
+        center = placement.point_vector(curve.center)
+        delta = center - geometry.center
+        axial = delta.dot(geometry.axis)
+        normal = placement.oriented_direction(curve.normal * (1 if curve.ratio > 0 else -1))
+        radius = placement.vector(curve.major_axis).magnitude
+        v = axial / geometry.cos_half_angle
+        apex_v = -geometry.reference_radius / geometry.sin_half_angle
+        if ((delta - geometry.axis * axial).magnitude > self.tolerance
+                or abs(abs(normal.dot(geometry.axis)) - 1) > 1e-10
+                or abs(radius - (geometry.reference_radius + v * geometry.sin_half_angle)) > self.tolerance
+                or abs(v - apex_v) <= self.tolerance):
+            return None
+        self._edge(ring_coedge, placement)  # Validate the source rim and its trim.
+        # The explicit apex loop selects the unique finite side of the rim.
+        flip = face.reversed ^ surface.reversed
+        builder = BRepBuilderAPI_MakeFace(geometry.surface, 0., 2 * math.pi,
+                                         min(v, apex_v), max(v, apex_v), self.tolerance)
+        if not builder.IsDone():
+            raise CadQueryConversionError("cone apex face construction failed")
+        result = self.cq.Face(builder.Face())
+        # CadQuery.Edges() deliberately filters degenerate edges. Inspect the
+        # OCCT topology directly when proving preservation of a source null edge.
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopoDS import TopoDS
+        explorer = TopExp_Explorer(result.wrapped, TopAbs_EDGE)
+        degenerate = []
+        while explorer.More():
+            candidate = TopoDS.Edge_s(explorer.Current())
+            if BRep_Tool.Degenerated_s(candidate):
+                degenerate.append(self.cq.Edge(candidate))
+            explorer.Next()
+        if len(degenerate) != 1 or any(
+                math.dist(vertex.toTuple(), (point.x, point.y, point.z)) > self.tolerance
+                for vertex in degenerate[0].Vertices()):
+            raise CadQueryConversionError(f"constructed cone lost its source apex: {len(degenerate)} degenerate edges",
+                                          code="geometry.degeneracy_unproven")
+        self.degenerate_edges.append({"face": face.index, "edge": edge.index,
+                                      "coedge": coedge.index, "method": "analytic_cone_apex"})
+        return self._reverse_face(result) if flip else result
+
+    def _closed_analytic_geometry(self, face, surface, placement):
+        from OCP.Geom import Geom_SphericalSurface, Geom_ToroidalSurface
+        from OCP.gp import gp_Ax3, gp_Dir, gp_Pnt
+        if not placement.preserves_circles:
+            raise CadQueryConversionError("sphere/torus requires a similarity placement")
+        center = placement.point_vector(surface.center)
+        axis = placement.vector(surface.pole if isinstance(surface, SphereSurfaceEntity) else surface.axis).normalized()
+        x = placement.vector(surface.u_direction).normalized()
+        if abs(axis.dot(x)) > 1e-9:
+            raise CadQueryConversionError("sphere/torus frame is not orthogonal")
+        y = axis.cross(x)
+        frame = gp_Ax3(gp_Pnt(center.x, center.y, center.z), gp_Dir(axis.x, axis.y, axis.z), gp_Dir(x.x, x.y, x.z))
+        scale = placement.vector(Vec3(1, 0, 0)).magnitude
+        if isinstance(surface, SphereSurfaceEntity):
+            radius = abs(surface.radius) * scale
+            if not math.isfinite(radius) or radius <= self.tolerance:
+                raise CadQueryConversionError("invalid sphere radius")
+            return _SphereGeometry(Geom_SphericalSurface(frame, radius), center, axis, x, y, radius, self.tolerance)
+        major, minor = surface.major_radius * scale, abs(surface.minor_radius) * scale
+        if not math.isfinite(major + minor) or not major > minor > self.tolerance:
+            raise CadQueryConversionError("only regular ring tori are qualified", code="geometry.singular_torus_unsupported")
+        return _TorusGeometry(Geom_ToroidalSurface(frame, major, minor), center, axis, x, y, major, self.tolerance, minor)
+
+    def _periodic_band(self, face, surface, loops, placement, geometry):
+        """Recognize two complete analytic isocircles and preserve their senses."""
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from OCP.TopAbs import TopAbs_REVERSED
+        if not self._is_full_revolution_face(loops):
+            return None
+        boundaries = []
+        signed_radius = surface.radius if isinstance(surface, SphereSurfaceEntity) else surface.minor_radius
+        flip = face.reversed ^ surface.reversed ^ (signed_radius < 0)
+        for loop in loops:
+            coedge = self._coedges(loop)[0]
+            edge = self._edge(coedge, placement)
+            curve = BRepAdaptor_Curve(edge.wrapped)
+            samples = []
+            for i in range(33):
+                t = curve.FirstParameter() + i / 32 * (curve.LastParameter() - curve.FirstParameter())
+                p = curve.Value(t)
+                uv = list(geometry.uv(Vec3(p.X(), p.Y(), p.Z())))
+                if samples:
+                    for d, periodic in enumerate((geometry.surface.IsUPeriodic(), geometry.surface.IsVPeriodic())):
+                        if periodic:
+                            uv[d] = samples[-1][d] + ((uv[d] - samples[-1][d] + math.pi) % (2 * math.pi) - math.pi)
+                samples.append(uv)
+            spans = [max(p[d] for p in samples) - min(p[d] for p in samples) for d in range(2)]
+            constant = 0 if spans[0] < spans[1] else 1
+            varying = 1 - constant
+            if spans[constant] > self.tolerance / max(geometry.radius, 1) * 10:
+                return None
+            if not math.isclose(spans[varying], 2 * math.pi, abs_tol=1e-8):
+                return None
+            direction = samples[-1][varying] - samples[0][varying]
+            if edge.wrapped.Orientation() == TopAbs_REVERSED:
+                direction = -direction
+            # For an outward UV chart the lower V boundary runs +U, and the
+            # lower U boundary runs -V. Signed radii carry surface sense.
+            lower = (direction * (-1 if flip else 1) * (1 if constant == 1 else -1)) > 0
+            boundaries.append((constant, samples[0][constant], lower))
+        if boundaries[0][0] != boundaries[1][0] or boundaries[0][2] == boundaries[1][2]:
+            raise CadQueryConversionError("periodic band has inconsistent boundary senses", code="geometry.boundary_orientation")
+        constant = boundaries[0][0]
+        lower = next(p[1] for p in boundaries if p[2])
+        upper = next(p[1] for p in boundaries if not p[2])
+        periodic = geometry.surface.IsUPeriodic() if constant == 0 else geometry.surface.IsVPeriodic()
+        if periodic:
+            upper = lower + (upper - lower) % (2 * math.pi)
+        if upper <= lower + 1e-12:
+            raise CadQueryConversionError("periodic band has an empty or ambiguous domain")
+        bounds = (lower, upper, 0., 2 * math.pi) if constant == 0 else (0., 2 * math.pi, lower, upper)
+        maker = BRepBuilderAPI_MakeFace(geometry.surface, *bounds, self.tolerance)
+        if not maker.IsDone():
+            raise CadQueryConversionError("periodic band construction failed")
+        result = self.cq.Face(maker.Face())
+        return self._reverse_face(result) if flip else result
+
+    def _closed_analytic_face(self, face, surface, loops, placement):
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        geometry = self._closed_analytic_geometry(face, surface, placement)
+        band = self._periodic_band(face, surface, loops, placement, geometry)
+        if band is not None:
+            return band
+        if isinstance(surface, SphereSurfaceEntity) and loops:
+            circular = self._sphere_circular_trims(face, surface, loops, placement, geometry)
+            if circular is not None:
+                return circular
+        if not loops:
+            # A loopless closed surface has no trim boundary. Finite saved subset
+            # ranges require chart interpretation and must not imply a full face.
+            if any(r is not None and (r.lower is not None or r.upper is not None)
+                   for r in (surface.u_range, surface.v_range)):
+                raise CadQueryConversionError("loopless surface has finite saved ranges", code="geometry.source_chart_unsupported")
+            builder = BRepBuilderAPI_MakeFace(geometry.surface, geometry.tolerance)
+        else:
+            wires = tuple(self._wire(loop, placement, geometry) for loop in loops)
+            builder = BRepBuilderAPI_MakeFace(geometry.surface, wires[0].wrapped, True)
+            for wire in wires[1:]:
+                builder.Add(wire.wrapped)
+            builder.Build()
+        if not builder.IsDone():
+            raise CadQueryConversionError(f"face ${face.index}: analytic trim failed")
+        result = self.cq.Face(builder.Face())
+        signed_radius = surface.radius if isinstance(surface, SphereSurfaceEntity) else surface.minor_radius
+        if face.reversed ^ surface.reversed ^ (signed_radius < 0):
+            result = self._reverse_face(result)
+        return result
+
+    def _sphere_circular_trims(self, face, surface, loops, placement, geometry):
+        """Trim a sphere by disjoint complete source circles, including seams.
+
+        An oriented circle selects a plane half-space. The intersection builds
+        OCCT seam/pole topology; every resulting physical boundary must still
+        cover a whole source circle, with matching analytic geometry.
+        """
+        from OCP.BRep import BRep_Tool
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeHalfSpace
+        from OCP.GeomAbs import GeomAbs_Circle
+        from OCP.TopAbs import TopAbs_REVERSED
+        from OCP.gp import gp_Pln, gp_Pnt, gp_Dir
+        circles = []
+        flip = face.reversed ^ surface.reversed ^ (surface.radius < 0)
+        for loop in loops:
+            coedges = self._coedges(loop)
+            if len(coedges) != 1:
+                return None
+            coedge = coedges[0]
+            edge = self._require(coedge.edge, EdgeEntity, context="sphere boundary")
+            curve = self.model.resolve(edge.curve)
+            if (not isinstance(curve, EllipseCurveEntity) or not curve.is_circle()
+                    or edge.start_vertex != edge.end_vertex):
+                return None
+            center = placement.point_vector(curve.center)
+            normal = placement.oriented_direction(curve.normal * (1 if curve.ratio > 0 else -1))
+            radius = placement.vector(curve.major_axis).magnitude
+            offset = center - geometry.center
+            if ((offset - normal * offset.dot(normal)).magnitude > self.tolerance
+                    or abs(math.hypot(offset.magnitude, radius) - geometry.radius) > self.tolerance):
+                raise CadQueryConversionError("sphere boundary is not a circle on the source sphere",
+                                              code="geometry.pcurve_mismatch")
+            converted = self._edge(coedge, placement)
+            sense = -1 if converted.wrapped.Orientation() == TopAbs_REVERSED else 1
+            # A mirror reverses the ambient orientation of the source traversal.
+            keep = normal * (sense * (-1 if flip else 1) * placement.orientation_sign)
+            circles.append((edge.index, center, normal, radius, keep))
+        result = BRepBuilderAPI_MakeFace(geometry.surface, self.tolerance).Face()
+        try:
+            for _, center, _, _, keep in circles:
+                plane = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(center.x, center.y, center.z),
+                                                     gp_Dir(keep.x, keep.y, keep.z))).Face()
+                outside = center - keep * max(geometry.radius, 1.)
+                half = BRepPrimAPI_MakeHalfSpace(plane, gp_Pnt(outside.x, outside.y, outside.z)).Solid()
+                cut = BRepAlgoAPI_Cut(result, half)
+                cut.Build()
+                if not cut.IsDone():
+                    raise ValueError("sphere half-space intersection failed")
+                result = cut.Shape()
+            faces = self.cq.Shape.cast(result).Faces()
+            if len(faces) != 1 or not faces[0].isValid():
+                raise CadQueryConversionError("circular sphere trims do not form one valid face",
+                                              code="geometry.face_invalid")
+            result = faces[0]
+            spans = [0.] * len(circles)
+            for converted in result.Edges():
+                if BRep_Tool.IsClosed_s(converted.wrapped, result.wrapped):
+                    continue  # An OCCT chart seam is not a physical trim.
+                adaptor = BRepAdaptor_Curve(converted.wrapped)
+                if adaptor.GetType() != GeomAbs_Circle:
+                    raise ValueError("sphere cut introduced a non-circular boundary")
+                circle = adaptor.Circle()
+                p, n = circle.Location(), circle.Axis().Direction()
+                center, normal = Vec3(p.X(), p.Y(), p.Z()), Vec3(n.X(), n.Y(), n.Z())
+                matches = [i for i, (_, c, axis, radius, _) in enumerate(circles)
+                           if (center - c).magnitude <= self.tolerance
+                           and abs(circle.Radius() - radius) <= self.tolerance
+                           and abs(abs(normal.dot(axis)) - 1) <= 1e-10]
+                if len(matches) != 1:
+                    raise ValueError("sphere cut has ambiguous or changed source boundary")
+                spans[matches[0]] += adaptor.LastParameter() - adaptor.FirstParameter()
+            if any(abs(span - 2 * math.pi) * circles[i][3] > self.tolerance for i, span in enumerate(spans)):
+                raise ValueError("sphere cut removed or changed a source circle")
+        except CadQueryConversionError:
+            raise
+        except Exception as error:
+            raise CadQueryConversionError("circular sphere trim verification failed",
+                                          code="geometry.analytic_trim_mismatch") from error
+        self.analytic_trim_faces.append({"face": face.index, "edges": [c[0] for c in circles],
+                                        "method": "sphere_oriented_circle_halfspaces"})
+        return self._reverse_face(result) if flip else result
+
+    def _bspline_geometry(self, surface: BSplineSurfaceEntity, placement):
+        from OCP.Geom import Geom_BSplineSurface
+        from OCP.TColgp import TColgp_Array2OfPnt
+        from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
+        from OCP.gp import gp_Pnt
+        surface.validate()
+        if surface.fit_tolerance > (self.model.metadata.resabs or 1e-6):
+            raise CadQueryConversionError("B-spline fit tolerance exceeds model precision", code="geometry.spline_fit_tolerance")
+        def array(values, cls):
+            result = cls(1, len(values))
+            for i, value in enumerate(values, 1):
+                result.SetValue(i, value)
+            return result
+        poles = TColgp_Array2OfPnt(1, surface.u_count, 1, surface.v_count)
+        weights = TColStd_Array2OfReal(1, surface.u_count, 1, surface.v_count)
+        for v in range(surface.v_count):
+            for u in range(surface.u_count):
+                index = v * surface.u_count + u
+                poles.SetValue(u+1, v+1, gp_Pnt(*placement.point(surface.poles[index])))
+                weights.SetValue(u+1, v+1, surface.weights[index])
+        return Geom_BSplineSurface(poles, weights,
+            array(surface.u_knots, TColStd_Array1OfReal), array(surface.v_knots, TColStd_Array1OfReal),
+            array(surface.u_multiplicities, TColStd_Array1OfInteger), array(surface.v_multiplicities, TColStd_Array1OfInteger),
+            surface.u_degree, surface.v_degree, False, False)
+
+    def _bspline_face(self, face, surface, loops, placement):
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from types import SimpleNamespace
+        ocp_surface = self._bspline_geometry(surface, placement)
+        geometry = SimpleNamespace(surface=ocp_surface, radius=1., tolerance=self.tolerance)
+        wires = tuple(self._wire(loop, placement, geometry) for loop in loops)
+        builder = BRepBuilderAPI_MakeFace(ocp_surface, wires[0].wrapped, True)
+        for wire in wires[1:]:
+            builder.Add(wire.wrapped)
+        builder.Build()
+        if not builder.IsDone():
+            raise CadQueryConversionError("B-spline face trim failed")
+        result = self.cq.Face(builder.Face())
+        return self._reverse_face(result) if face.reversed != surface.reversed else result
+
     def _face(self, face: FaceEntity, placement: _Placement):
         surface = self.model.resolve(face.surface)
-        if not isinstance(surface, (PlaneSurfaceEntity, ConeSurfaceEntity)):
+        if not isinstance(surface, (PlaneSurfaceEntity, ConeSurfaceEntity, SphereSurfaceEntity, TorusSurfaceEntity, BSplineSurfaceEntity)):
             if surface is None:
                 actual = "null"
             elif isinstance(surface, RawEntity):
@@ -730,7 +1203,7 @@ class CadQueryConverter:
             else:
                 actual = surface.raw.type_name
             raise CadQueryConversionError(
-                f"face ${face.index} surface: unsupported geometry {actual}"
+                f"face ${face.index} surface: unsupported geometry {actual}", code="geometry.surface_unsupported"
             )
         loops = self._linked_entities(
             face.loop,
@@ -738,7 +1211,7 @@ class CadQueryConverter:
             "next_loop",
             context=f"face ${face.index} loops",
         )
-        if not loops:
+        if not loops and not isinstance(surface, (SphereSurfaceEntity, TorusSurfaceEntity)):
             raise CadQueryConversionError(f"face ${face.index} has no loop")
         for loop in loops:
             if loop.face.index != face.index:
@@ -748,10 +1221,14 @@ class CadQueryConverter:
                 )
         if isinstance(surface, PlaneSurfaceEntity):
             result = self._plane_face(face, loops, placement)
-        else:
+        elif isinstance(surface, BSplineSurfaceEntity):
+            result = self._bspline_face(face, surface, loops, placement)
+        elif isinstance(surface, ConeSurfaceEntity):
             result = self._cone_face(face, surface, loops, placement)
+        else:
+            result = self._closed_analytic_face(face, surface, loops, placement)
         if not result.isValid():
-            raise CadQueryConversionError(f"face ${face.index}: face is invalid")
+            raise CadQueryConversionError(f"face ${face.index}: face is invalid", code="geometry.face_invalid")
         return result
 
     def _shell(
@@ -788,9 +1265,24 @@ class CadQueryConverter:
         # such a result as a Compound of independently closed Shells rather
         # than one non-manifold Shell, so retain every closed component.
         components = tuple(result.Shells())
+        if not components and len(faces) == 1 and faces[0].loop.is_null and isinstance(
+                self.model.resolve(faces[0].surface), (SphereSurfaceEntity, TorusSurfaceEntity)):
+            # Sewing returns a Face for a single closed surface. Retain that
+            # face in an explicit shell; closure/validity are still checked.
+            from OCP.BRep import BRep_Builder, BRep_Tool
+            from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_NoError
+            from OCP.TopoDS import TopoDS_Shell
+            wrapped = TopoDS_Shell()
+            builder = BRep_Builder()
+            builder.MakeShell(wrapped)
+            for converted_face in result.Faces():
+                builder.Add(wrapped, converted_face.wrapped)
+            if BRep_Tool.IsClosed_s(wrapped) and BRepCheck_Shell(wrapped).Closed() == BRepCheck_NoError:
+                wrapped.Closed(True)
+            components = (self.cq.Shell(wrapped),)
         if not components:
             raise CadQueryConversionError(
-                f"shell ${shell.index}: sewing produced no shell"
+                f"shell ${shell.index}: sewing produced no shell", code="geometry.sewing_no_shell"
             )
         for component_index, component in enumerate(components):
             if not component.isValid():
@@ -799,7 +1291,7 @@ class CadQueryConverter:
                 )
             if not component.Closed():
                 raise CadQueryConversionError(
-                    f"shell ${shell.index}: component {component_index} is not closed"
+                    f"shell ${shell.index}: component {component_index} is not closed", code="geometry.shell_open"
                 )
         return components
 

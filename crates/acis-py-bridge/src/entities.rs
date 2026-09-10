@@ -369,7 +369,7 @@ pub fn write_point_entity<'py>(
     let args = vec![
         raw_to_py(py, &entity.raw)?,
         reference_to_py(py, entity.pattern)?,
-        vec3_to_py(py, entity.location)?,
+        vector_to_python(py, entity.location)?,
     ];
     construct(py, "PointEntity", args)
 }
@@ -403,8 +403,8 @@ pub fn write_straight_curve_entity<'py>(
     let args = vec![
         raw_to_py(py, &entity.raw)?,
         reference_to_py(py, entity.pattern)?,
-        vec3_to_py(py, entity.origin)?,
-        vec3_to_py(py, entity.direction)?,
+        vector_to_python(py, entity.origin)?,
+        vector_to_python(py, entity.direction)?,
         optional_to_py(py, entity.parameter_range.as_ref(), range_to_py)?,
     ];
     construct(py, "StraightCurveEntity", args)
@@ -447,9 +447,9 @@ pub fn write_ellipse_curve_entity<'py>(
     let args = vec![
         raw_to_py(py, &entity.raw)?,
         reference_to_py(py, entity.pattern)?,
-        vec3_to_py(py, entity.center)?,
-        vec3_to_py(py, entity.normal)?,
-        vec3_to_py(py, entity.major_axis)?,
+        vector_to_python(py, entity.center)?,
+        vector_to_python(py, entity.normal)?,
+        vector_to_python(py, entity.major_axis)?,
         entity.ratio.into_bound_py_any(py)?,
         optional_to_py(py, entity.parameter_range.as_ref(), range_to_py)?,
     ];
@@ -497,9 +497,9 @@ pub fn write_plane_surface_entity<'py>(
     let args = vec![
         raw_to_py(py, &entity.raw)?,
         reference_to_py(py, entity.pattern)?,
-        vec3_to_py(py, entity.origin)?,
-        vec3_to_py(py, entity.normal)?,
-        vec3_to_py(py, entity.u_direction)?,
+        vector_to_python(py, entity.origin)?,
+        vector_to_python(py, entity.normal)?,
+        vector_to_python(py, entity.u_direction)?,
         entity.reverse_v.into_bound_py_any(py)?,
         optional_to_py(py, entity.u_range.as_ref(), range_to_py)?,
         optional_to_py(py, entity.v_range.as_ref(), range_to_py)?,
@@ -542,6 +542,7 @@ pub fn read_cone_surface_entity(value: &Bound<'_, PyAny>) -> PyResult<ConeSurfac
             let field = value.getattr("cos_half_angle")?;
             field.extract()?
         },
+        parameter_scale: value.getattr("parameter_scale")?.extract()?,
         reference_radius: {
             let field = value.getattr("reference_radius")?;
             field.extract()?
@@ -568,14 +569,15 @@ pub fn write_cone_surface_entity<'py>(
     let args = vec![
         raw_to_py(py, &entity.raw)?,
         reference_to_py(py, entity.pattern)?,
-        vec3_to_py(py, entity.center)?,
-        vec3_to_py(py, entity.axis)?,
-        vec3_to_py(py, entity.major_axis)?,
+        vector_to_python(py, entity.center)?,
+        vector_to_python(py, entity.axis)?,
+        vector_to_python(py, entity.major_axis)?,
         entity.ratio.into_bound_py_any(py)?,
         optional_to_py(py, entity.profile_range.as_ref(), range_to_py)?,
         entity.sin_half_angle.into_bound_py_any(py)?,
         entity.cos_half_angle.into_bound_py_any(py)?,
         entity.reference_radius.into_bound_py_any(py)?,
+        entity.parameter_scale.into_bound_py_any(py)?,
         entity.reversed.into_bound_py_any(py)?,
         optional_to_py(py, entity.u_range.as_ref(), range_to_py)?,
         optional_to_py(py, entity.v_range.as_ref(), range_to_py)?,
@@ -624,6 +626,280 @@ pub fn write_transform_entity<'py>(
     construct(py, "TransformEntity", args)
 }
 
+pub fn read_sphere_surface_entity(value: &Bound<'_, PyAny>) -> PyResult<SphereSurfaceEntity> {
+    Ok(SphereSurfaceEntity {
+        raw: raw_entity(&value.getattr("raw")?)?,
+        pattern: {
+            let field = value.getattr("pattern")?;
+            reference(&field)?
+        },
+        center: {
+            let field = value.getattr("center")?;
+            vec3(&field)?
+        },
+        radius: {
+            let field = value.getattr("radius")?;
+            field.extract()?
+        },
+        pole: {
+            let field = value.getattr("pole")?;
+            vec3(&field)?
+        },
+        u_direction: {
+            let field = value.getattr("u_direction")?;
+            vec3(&field)?
+        },
+        reversed: {
+            let field = value.getattr("reversed")?;
+            field.extract()?
+        },
+        u_range: {
+            let field = value.getattr("u_range")?;
+            optional(&field, range)?
+        },
+        v_range: {
+            let field = value.getattr("v_range")?;
+            optional(&field, range)?
+        },
+    })
+}
+
+pub fn write_sphere_surface_entity<'py>(
+    py: Python<'py>,
+    entity: &SphereSurfaceEntity,
+) -> PyResult<Bound<'py, PyAny>> {
+    construct(
+        py,
+        "SphereSurfaceEntity",
+        vec![
+            raw_to_py(py, &entity.raw)?,
+            reference_to_py(py, entity.pattern)?,
+            vector_to_python(py, entity.center)?,
+            entity.radius.into_bound_py_any(py)?,
+            vector_to_python(py, entity.pole)?,
+            vector_to_python(py, entity.u_direction)?,
+            entity.reversed.into_bound_py_any(py)?,
+            optional_to_py(py, entity.u_range.as_ref(), range_to_py)?,
+            optional_to_py(py, entity.v_range.as_ref(), range_to_py)?,
+        ],
+    )
+}
+
+pub fn read_torus_surface_entity(value: &Bound<'_, PyAny>) -> PyResult<TorusSurfaceEntity> {
+    Ok(TorusSurfaceEntity {
+        raw: raw_entity(&value.getattr("raw")?)?,
+        pattern: {
+            let field = value.getattr("pattern")?;
+            reference(&field)?
+        },
+        center: {
+            let field = value.getattr("center")?;
+            vec3(&field)?
+        },
+        axis: {
+            let field = value.getattr("axis")?;
+            vec3(&field)?
+        },
+        major_radius: {
+            let field = value.getattr("major_radius")?;
+            field.extract()?
+        },
+        minor_radius: {
+            let field = value.getattr("minor_radius")?;
+            field.extract()?
+        },
+        u_direction: {
+            let field = value.getattr("u_direction")?;
+            vec3(&field)?
+        },
+        reversed: {
+            let field = value.getattr("reversed")?;
+            field.extract()?
+        },
+        u_range: {
+            let field = value.getattr("u_range")?;
+            optional(&field, range)?
+        },
+        v_range: {
+            let field = value.getattr("v_range")?;
+            optional(&field, range)?
+        },
+    })
+}
+
+pub fn write_torus_surface_entity<'py>(
+    py: Python<'py>,
+    entity: &TorusSurfaceEntity,
+) -> PyResult<Bound<'py, PyAny>> {
+    construct(
+        py,
+        "TorusSurfaceEntity",
+        vec![
+            raw_to_py(py, &entity.raw)?,
+            reference_to_py(py, entity.pattern)?,
+            vector_to_python(py, entity.center)?,
+            vector_to_python(py, entity.axis)?,
+            entity.major_radius.into_bound_py_any(py)?,
+            entity.minor_radius.into_bound_py_any(py)?,
+            vector_to_python(py, entity.u_direction)?,
+            entity.reversed.into_bound_py_any(py)?,
+            optional_to_py(py, entity.u_range.as_ref(), range_to_py)?,
+            optional_to_py(py, entity.v_range.as_ref(), range_to_py)?,
+        ],
+    )
+}
+
+pub fn read_bspline_surface_entity(value: &Bound<'_, PyAny>) -> PyResult<BSplineSurfaceEntity> {
+    Ok(BSplineSurfaceEntity {
+        raw: raw_entity(&value.getattr("raw")?)?,
+        pattern: {
+            let field = value.getattr("pattern")?;
+            reference(&field)?
+        },
+        u_degree: {
+            let field = value.getattr("u_degree")?;
+            field.extract()?
+        },
+        v_degree: {
+            let field = value.getattr("v_degree")?;
+            field.extract()?
+        },
+        u_knots: {
+            let field = value.getattr("u_knots")?;
+            field.extract()?
+        },
+        v_knots: {
+            let field = value.getattr("v_knots")?;
+            field.extract()?
+        },
+        u_multiplicities: {
+            let field = value.getattr("u_multiplicities")?;
+            field.extract()?
+        },
+        v_multiplicities: {
+            let field = value.getattr("v_multiplicities")?;
+            field.extract()?
+        },
+        u_count: {
+            let field = value.getattr("u_count")?;
+            field.extract()?
+        },
+        v_count: {
+            let field = value.getattr("v_count")?;
+            field.extract()?
+        },
+        poles: {
+            let field = value.getattr("poles")?;
+            field
+                .try_iter()?
+                .map(|p| vec3(&p?))
+                .collect::<PyResult<Vec<_>>>()?
+        },
+        weights: {
+            let field = value.getattr("weights")?;
+            field.extract()?
+        },
+        reversed: {
+            let field = value.getattr("reversed")?;
+            field.extract()?
+        },
+        u_range: {
+            let field = value.getattr("u_range")?;
+            optional(&field, range)?
+        },
+        v_range: {
+            let field = value.getattr("v_range")?;
+            optional(&field, range)?
+        },
+        fit_tolerance: {
+            let field = value.getattr("fit_tolerance")?;
+            field.extract()?
+        },
+    })
+}
+
+pub fn write_bspline_surface_entity<'py>(
+    py: Python<'py>,
+    entity: &BSplineSurfaceEntity,
+) -> PyResult<Bound<'py, PyAny>> {
+    construct(
+        py,
+        "BSplineSurfaceEntity",
+        vec![
+            raw_to_py(py, &entity.raw)?,
+            reference_to_py(py, entity.pattern)?,
+            entity.u_degree.into_bound_py_any(py)?,
+            entity.v_degree.into_bound_py_any(py)?,
+            PyTuple::new(py, entity.u_knots.iter().copied())?.into_any(),
+            PyTuple::new(py, entity.v_knots.iter().copied())?.into_any(),
+            PyTuple::new(py, entity.u_multiplicities.iter().copied())?.into_any(),
+            PyTuple::new(py, entity.v_multiplicities.iter().copied())?.into_any(),
+            entity.u_count.into_bound_py_any(py)?,
+            entity.v_count.into_bound_py_any(py)?,
+            PyTuple::new(
+                py,
+                entity
+                    .poles
+                    .iter()
+                    .map(|p| vector_to_python(py, *p))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+            PyTuple::new(py, entity.weights.iter().copied())?.into_any(),
+            entity.reversed.into_bound_py_any(py)?,
+            optional_to_py(py, entity.u_range.as_ref(), range_to_py)?,
+            optional_to_py(py, entity.v_range.as_ref(), range_to_py)?,
+            entity.fit_tolerance.into_bound_py_any(py)?,
+        ],
+    )
+}
+
+pub fn read_bspline_curve_entity(value: &Bound<'_, PyAny>) -> PyResult<BSplineCurveEntity> {
+    Ok(BSplineCurveEntity {
+        raw: raw_entity(&value.getattr("raw")?)?,
+        pattern: reference(&value.getattr("pattern")?)?,
+        degree: value.getattr("degree")?.extract()?,
+        knots: value.getattr("knots")?.extract()?,
+        multiplicities: value.getattr("multiplicities")?.extract()?,
+        poles: value
+            .getattr("poles")?
+            .try_iter()?
+            .map(|p| vec3(&p?))
+            .collect::<PyResult<Vec<_>>>()?,
+        weights: value.getattr("weights")?.extract()?,
+        parameter_range: optional(&value.getattr("parameter_range")?, range)?,
+        fit_tolerance: value.getattr("fit_tolerance")?.extract()?,
+    })
+}
+pub fn write_bspline_curve_entity<'py>(
+    py: Python<'py>,
+    entity: &BSplineCurveEntity,
+) -> PyResult<Bound<'py, PyAny>> {
+    construct(
+        py,
+        "BSplineCurveEntity",
+        vec![
+            raw_to_py(py, &entity.raw)?,
+            reference_to_py(py, entity.pattern)?,
+            entity.degree.into_bound_py_any(py)?,
+            PyTuple::new(py, entity.knots.iter().copied())?.into_any(),
+            PyTuple::new(py, entity.multiplicities.iter().copied())?.into_any(),
+            PyTuple::new(
+                py,
+                entity
+                    .poles
+                    .iter()
+                    .map(|p| vector_to_python(py, *p))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+            PyTuple::new(py, entity.weights.iter().copied())?.into_any(),
+            optional_to_py(py, entity.parameter_range.as_ref(), range_to_py)?,
+            entity.fit_tolerance.into_bound_py_any(py)?,
+        ],
+    )
+}
+
 pub fn read_entity(value: &Bound<'_, PyAny>) -> PyResult<Entity> {
     let py = value.py();
     let module = py.import("cq_acis.model")?;
@@ -660,6 +936,9 @@ pub fn read_entity(value: &Bound<'_, PyAny>) -> PyResult<Entity> {
     if value.get_type().is(&module.getattr("StraightCurveEntity")?) {
         return Ok(Entity::StraightCurve(read_straight_curve_entity(value)?));
     }
+    if value.get_type().is(&module.getattr("BSplineCurveEntity")?) {
+        return Ok(Entity::BSplineCurve(read_bspline_curve_entity(value)?));
+    }
     if value.get_type().is(&module.getattr("EllipseCurveEntity")?) {
         return Ok(Entity::EllipseCurve(read_ellipse_curve_entity(value)?));
     }
@@ -668,6 +947,18 @@ pub fn read_entity(value: &Bound<'_, PyAny>) -> PyResult<Entity> {
     }
     if value.get_type().is(&module.getattr("ConeSurfaceEntity")?) {
         return Ok(Entity::ConeSurface(read_cone_surface_entity(value)?));
+    }
+    if value.get_type().is(&module.getattr("SphereSurfaceEntity")?) {
+        return Ok(Entity::SphereSurface(read_sphere_surface_entity(value)?));
+    }
+    if value.get_type().is(&module.getattr("TorusSurfaceEntity")?) {
+        return Ok(Entity::TorusSurface(read_torus_surface_entity(value)?));
+    }
+    if value
+        .get_type()
+        .is(&module.getattr("BSplineSurfaceEntity")?)
+    {
+        return Ok(Entity::BSplineSurface(read_bspline_surface_entity(value)?));
     }
     if value.get_type().is(&module.getattr("TransformEntity")?) {
         return Ok(Entity::Transform(read_transform_entity(value)?));
@@ -693,6 +984,10 @@ pub fn write_entity<'py>(py: Python<'py>, entity: &Entity) -> PyResult<Bound<'py
         Entity::EllipseCurve(entity) => write_ellipse_curve_entity(py, entity),
         Entity::PlaneSurface(entity) => write_plane_surface_entity(py, entity),
         Entity::ConeSurface(entity) => write_cone_surface_entity(py, entity),
+        Entity::SphereSurface(entity) => write_sphere_surface_entity(py, entity),
+        Entity::TorusSurface(entity) => write_torus_surface_entity(py, entity),
+        Entity::BSplineSurface(entity) => write_bspline_surface_entity(py, entity),
+        Entity::BSplineCurve(entity) => write_bspline_curve_entity(py, entity),
         Entity::Transform(entity) => write_transform_entity(py, entity),
     }
 }

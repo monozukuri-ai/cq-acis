@@ -383,10 +383,45 @@ pub fn parse_sab(data: &[u8], source_id: &str, limits: &SabLimits) -> Result<Sab
             source: Some(source.clone()),
             raw_data: Some(data[start..c.pos].to_vec()),
         };
-        let entity = match decode(&mut reader, raw.clone()) {
+        let entity = match crate::asm_nurbs::decode(&raw, header.save_version)
+            .map_err(|message| error(start, message))
+            .and_then(|decoded| match decoded {
+                Some(entity) => Ok(Some(entity)),
+                None => decode(&mut reader, raw.clone()),
+            }) {
             Ok(Some(entity)) => entity,
             Ok(None) => {
                 opaque_count += 1;
+                if matches!(
+                    raw.type_name.as_str(),
+                    "spline-surface"
+                        | "intcurve-curve"
+                        | "pcurve"
+                        | "tolerant-edge"
+                        | "tolerant-vertex"
+                        | "tolerant-coedge"
+                        | "tvertex-vertex"
+                        | "tedge-edge"
+                        | "tcoedge-coedge"
+                ) {
+                    let subtype = raw
+                        .values
+                        .iter()
+                        .find_map(|v| match v {
+                            AcisValue::String(s) => Some(s.as_str()),
+                            _ => None,
+                        })
+                        .unwrap_or("no named subtype");
+                    diagnostics.push(AcisDiagnostic {
+                        code: "sab.geometry_subtype_unsupported".into(),
+                        message: format!(
+                            "{}: {subtype}; source subtype/chart/topology is not qualified",
+                            raw.type_name
+                        ),
+                        entity_index: Some(index),
+                        source: Some(source.clone()),
+                    });
+                }
                 Entity::Raw(raw)
             }
             Err(e) => {
@@ -662,8 +697,14 @@ fn decode(r: &mut Reader<'_>, raw: RawEntity) -> Result<Option<Entity>> {
             let u_range = r.range()?;
             let v_range = r.range()?;
             let radius = major_axis.magnitude();
-            if cos_half_angle <= 0.0 || (parameter_scale - radius).abs() > 1e-9 * radius.max(1.0) {
-                return Err(error(r.offset, "unsupported cone chart/normal convention"));
+            if radius <= 0.0
+                || parameter_scale <= 0.0
+                || ratio == 0.0
+                || cos_half_angle.abs() <= 1e-12
+                || (sin_half_angle * sin_half_angle + cos_half_angle * cos_half_angle - 1.0).abs()
+                    > 1e-9
+            {
+                return Err(error(r.offset, "invalid cone frame/angle/scale"));
             }
             Entity::ConeSurface(ConeSurfaceEntity {
                 raw,
@@ -676,11 +717,35 @@ fn decode(r: &mut Reader<'_>, raw: RawEntity) -> Result<Option<Entity>> {
                 sin_half_angle,
                 cos_half_angle,
                 reference_radius: radius,
+                parameter_scale,
                 reversed,
                 u_range,
                 v_range,
             })
         }
+        "sphere-surface" | "sphere" => Entity::SphereSurface(SphereSurfaceEntity {
+            raw,
+            pattern: r.reference()?,
+            center: r.vector()?,
+            radius: r.number()?,
+            u_direction: r.vector()?,
+            pole: r.vector()?,
+            reversed: r.boolean()?,
+            u_range: r.range()?,
+            v_range: r.range()?,
+        }),
+        "torus-surface" | "torus" => Entity::TorusSurface(TorusSurfaceEntity {
+            raw,
+            pattern: r.reference()?,
+            center: r.vector()?,
+            axis: r.vector()?,
+            major_radius: r.number()?,
+            minor_radius: r.number()?,
+            u_direction: r.vector()?,
+            reversed: r.boolean()?,
+            u_range: r.range()?,
+            v_range: r.range()?,
+        }),
         "transform" => {
             let text = r.text()?;
             let words = text.split_whitespace().collect::<Vec<_>>();

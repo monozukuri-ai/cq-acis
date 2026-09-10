@@ -56,3 +56,10 @@ Inventor container parsing is implemented in the separate `inventor-kit` crate.
 cargo test -p acis-core --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
+
+M4 development version 0.2.0 adds signed sphere/torus records, a separate cone
+parameter scale, and bounded explicit clamped NURBS surface evaluation / SAT 700
+`exactsur` decoding. Canonical evaluator coordinates are documented separately
+from saved ACIS charts. Explicit clamped curves and the experimental ASM 22700 /
+embedded 22601 forward direct NURBS profile are also supported, only with the
+qualified default trailers. Other procedural ASM spline records remain opaque.

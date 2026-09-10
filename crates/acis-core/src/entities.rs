@@ -146,6 +146,8 @@ pub struct ConeSurfaceEntity {
     pub sin_half_angle: f64,
     pub cos_half_angle: f64,
     pub reference_radius: f64,
+    /// Saved ACIS chart scale; not a geometric radius.
+    pub parameter_scale: f64,
     pub reversed: bool,
     pub u_range: Option<ParameterRange>,
     pub v_range: Option<ParameterRange>,
@@ -159,6 +161,68 @@ pub struct TransformEntity {
     pub rotated: bool,
     pub reflected: bool,
     pub sheared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SphereSurfaceEntity {
+    pub raw: RawEntity,
+    pub pattern: EntityRef,
+    pub center: Vec3,
+    pub radius: f64,
+    pub pole: Vec3,
+    pub u_direction: Vec3,
+    pub reversed: bool,
+    pub u_range: Option<ParameterRange>,
+    pub v_range: Option<ParameterRange>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TorusSurfaceEntity {
+    pub raw: RawEntity,
+    pub pattern: EntityRef,
+    pub center: Vec3,
+    pub axis: Vec3,
+    pub major_radius: f64,
+    pub minor_radius: f64,
+    pub u_direction: Vec3,
+    pub reversed: bool,
+    pub u_range: Option<ParameterRange>,
+    pub v_range: Option<ParameterRange>,
+}
+
+/// Explicit clamped, non-periodic rational B-spline curve in the saved parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BSplineCurveEntity {
+    pub raw: RawEntity,
+    pub pattern: EntityRef,
+    pub degree: usize,
+    pub knots: Vec<f64>,
+    pub multiplicities: Vec<usize>,
+    pub poles: Vec<Vec3>,
+    pub weights: Vec<f64>,
+    pub parameter_range: Option<ParameterRange>,
+    pub fit_tolerance: f64,
+}
+
+/// Explicit, non-periodic, clamped tensor-product surface. Poles are V-major.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BSplineSurfaceEntity {
+    pub raw: RawEntity,
+    pub pattern: EntityRef,
+    pub u_degree: usize,
+    pub v_degree: usize,
+    pub u_knots: Vec<f64>,
+    pub v_knots: Vec<f64>,
+    pub u_multiplicities: Vec<usize>,
+    pub v_multiplicities: Vec<usize>,
+    pub u_count: usize,
+    pub v_count: usize,
+    pub poles: Vec<Vec3>,
+    pub weights: Vec<f64>,
+    pub reversed: bool,
+    pub u_range: Option<ParameterRange>,
+    pub v_range: Option<ParameterRange>,
+    pub fit_tolerance: f64,
 }
 
 /// Unknown entities remain raw; bytes do not imply decoded semantics.
@@ -178,6 +242,10 @@ pub enum Entity {
     EllipseCurve(EllipseCurveEntity),
     PlaneSurface(PlaneSurfaceEntity),
     ConeSurface(ConeSurfaceEntity),
+    SphereSurface(SphereSurfaceEntity),
+    TorusSurface(TorusSurfaceEntity),
+    BSplineSurface(BSplineSurfaceEntity),
+    BSplineCurve(BSplineCurveEntity),
     Transform(TransformEntity),
 }
 
@@ -198,6 +266,10 @@ impl Entity {
             Self::EllipseCurve(entity) => &entity.raw,
             Self::PlaneSurface(entity) => &entity.raw,
             Self::ConeSurface(entity) => &entity.raw,
+            Self::SphereSurface(entity) => &entity.raw,
+            Self::TorusSurface(entity) => &entity.raw,
+            Self::BSplineSurface(entity) => &entity.raw,
+            Self::BSplineCurve(entity) => &entity.raw,
             Self::Transform(entity) => &entity.raw,
         }
     }
@@ -255,6 +327,10 @@ impl Entity {
             Self::EllipseCurve(entity) => refs.extend([entity.pattern]),
             Self::PlaneSurface(entity) => refs.extend([entity.pattern]),
             Self::ConeSurface(entity) => refs.extend([entity.pattern]),
+            Self::SphereSurface(entity) => refs.extend([entity.pattern]),
+            Self::TorusSurface(entity) => refs.extend([entity.pattern]),
+            Self::BSplineSurface(entity) => refs.extend([entity.pattern]),
+            Self::BSplineCurve(entity) => refs.extend([entity.pattern]),
             Self::Transform(_) => {}
         }
         refs

@@ -11,8 +11,8 @@ name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-acis-core = { path = "../acis-core", version = "0.1.0" }
-num-bigint.workspace = true
+acis-core = "=0.2.0"
+acis-py-bridge = { path = "../acis-py-bridge", version = "=0.2.0" }
 pyo3.workspace = true
 
 [features]

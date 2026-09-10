@@ -12,6 +12,10 @@ from .model import (
     BodyEntity,
     CoedgeEntity,
     ConeSurfaceEntity,
+    BSplineSurfaceEntity,
+    BSplineCurveEntity,
+    TorusSurfaceEntity,
+    SphereSurfaceEntity,
     DecodedEntity,
     EdgeEntity,
     EllipseCurveEntity,
@@ -378,9 +382,9 @@ def _decode_cone_surface(reader: _EntityReader) -> ConeSurfaceEntity:
     # Some v400 writers omit this scaling field; the magnitude of major_axis
     # is the equivalent reference radius. It is present in the corpus at v600+.
     if reader.version >= 400 and reader.next_is_number():
-        reference_radius = reader.read_float()
+        parameter_scale = reader.read_float()
     else:
-        reference_radius = major_axis.magnitude
+        parameter_scale = major_axis.magnitude
 
     reversed_ = reader.read_bool(
         "reversed", "forward", allow_numeric=reader.version < 400
@@ -402,11 +406,39 @@ def _decode_cone_surface(reader: _EntityReader) -> ConeSurfaceEntity:
         profile_range,
         sin_half_angle,
         cos_half_angle,
-        reference_radius,
+        major_axis.magnitude,
+        parameter_scale,
         reversed_,
         u_range,
         v_range,
     )
+
+
+def _decode_sphere_surface(reader: _EntityReader) -> SphereSurfaceEntity:
+    pattern = _read_pattern(reader)
+    center = reader.read_vec3()
+    radius = reader.read_float()
+    u_direction = reader.read_vec3()
+    pole = reader.read_vec3()
+    reversed = reader.read_bool("reverse_v", "forward_v", allow_numeric=reader.version < 400)
+    u_range = reader.read_range() if reader.version >= 400 else None
+    v_range = reader.read_range() if reader.version >= 400 else None
+    reader.finish()
+    return SphereSurfaceEntity(reader.raw, pattern, center, radius, pole, u_direction, reversed, u_range, v_range)
+
+
+def _decode_torus_surface(reader: _EntityReader) -> TorusSurfaceEntity:
+    pattern = _read_pattern(reader)
+    center = reader.read_vec3()
+    axis = reader.read_vec3()
+    major_radius = reader.read_float()
+    minor_radius = reader.read_float()
+    u_direction = reader.read_vec3()
+    reversed = reader.read_bool("reverse_v", "forward_v", allow_numeric=reader.version < 400)
+    u_range = reader.read_range() if reader.version >= 400 else None
+    v_range = reader.read_range() if reader.version >= 400 else None
+    reader.finish()
+    return TorusSurfaceEntity(reader.raw, pattern, center, axis, major_radius, minor_radius, u_direction, reversed, u_range, v_range)
 
 
 def _decode_transform(reader: _EntityReader) -> TransformEntity:
@@ -436,6 +468,8 @@ _DECODERS: dict[str, Decoder] = {
     "ellipse-curve": _decode_ellipse_curve,
     "plane-surface": _decode_plane_surface,
     "cone-surface": _decode_cone_surface,
+    "sphere-surface": _decode_sphere_surface,
+    "torus-surface": _decode_torus_surface,
     "transform": _decode_transform,
 }
 SUPPORTED_ENTITY_TYPES = frozenset(_DECODERS)
@@ -444,6 +478,12 @@ SUPPORTED_ENTITY_TYPES = frozenset(_DECODERS)
 def decode_entity(graph: SatEntityGraph, raw: RawEntity) -> ModelEntity:
     """Decode a supported entity, preserving unsupported records as-is."""
 
+    if raw.type_name == "spline-surface":
+        from . import _native
+        try:
+            return _native.decode_sat_exactsur(raw, graph.header.save_version)
+        except ValueError as error:
+            raise EntityDecodeError(f"record {raw.index}: {error}") from error
     decoder = _DECODERS.get(raw.type_name)
     if decoder is None:
         return raw

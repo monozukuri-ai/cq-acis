@@ -7,7 +7,7 @@ English: [README.md](README.md)
 
 > 実験的なプロジェクトです。ACISの保存形式や出力元によってレコードが
 > 異なるため、未対応エンティティはRawEntityとして保持し、正確なshapeを
-> 作れない場合は近似せずエラーにします。
+> 作れない場合はエラーにします。2D トリムの近似は元の精度内で別途検証します。
 
 ## 機能
 
@@ -18,13 +18,19 @@ English: [README.md](README.md)
 - `$n`ポインタを検証するエンティティグラフ
 - SAT保存形式105、400、600、700の型付きデコード
 - body、lump、shell、face、loop、coedge、edge、vertex、point、
-  straight-curve、ellipse-curve、plane-surface、cone-surface、transformの解析
-- 直線、円／楕円エッジ、平面、円筒、円錐の正確なCadQuery変換
+  straight-curve、ellipse-curve、plane-surface、cone-surface、sphere-surface、torus-surface、transformの解析
+- 直線、円／楕円エッジ、平面、円筒・楕円円筒、円錐、球・トーラスの限定変換
 - 非多様体ACISシェルのSolid／Compoundへの分解
 - 未対応レコードのRawEntity保持
 - Rustの共通モデル・参照検証・解析的形状計算とPyO3バインディング
 
-楕円断面の円錐、楕円筒、せん断配置、未対応の曲線・曲面は近似せず拒否します。
+M4 では SAT 700 の直接 `exactsur` NURBS 曲面も実験的に追加しています。
+ASM 22700 / 内部 22601 の直接 NURBS、証明できる円錐の縮退辺、球面の円形穴、
+二つの同軸楕円断面で囲まれた楕円円錐にも限定対応しています。
+非相似の配置、他の未解釈 subtype は拒否します。
+対応範囲・検証限界は [M4 の仕様](docs/m4-geometry.md)を参照してください。
+0.3.0 開発版は model API 2 と core / bridge 0.2.0 を要求します。
+新しい crate / Python パッケージの公開は別作業です。
 
 ## インストール
 

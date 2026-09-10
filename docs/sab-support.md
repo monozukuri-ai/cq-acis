@@ -17,12 +17,12 @@ reference closure. These are exact save-format numbers, not an Inventor product
 release range. Other save versions and signatures raise `ValueError`.
 
 The currently typed entities are body, lump, shell, face, loop, coedge, edge,
-vertex, point, straight, ellipse, plane, cone/cylinder, and transform. Names with
+vertex, point, straight, ellipse, plane, cone/cylinder, sphere, torus and transform. Names with
 `-curve` / `-surface` suffixes are admitted. Each decoder must consume all fields;
 an unfamiliar layout remains `RawEntity` with `sab.entity_schema_unsupported`.
-Cone charts with nonpositive cosine or a parameter scale differing from the
-major radius remain raw, because the shared analytic converter does not yet
-express their native chart/normal conventions. Unknown entities and attributes
+M4 retains negative cone cosine and a separate `parameter_scale`; evaluation
+uses a documented canonical chart. Raw source ranges are not treated as OCCT
+coordinates. See [M4 geometry](m4-geometry.md) for conversion and NURBS limits. Unknown entities and attributes
 remain raw. Tags 22 and 23 retain their payload bytes without interpreting them.
 
 `raw_data` is the exact record slice; `SourceSpan` uses the supplied source byte

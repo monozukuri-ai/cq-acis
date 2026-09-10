@@ -48,6 +48,7 @@ fn cone_and_plane_orientation_have_independent_expected_values() {
         sin_half_angle: 0.6,
         cos_half_angle: 0.8,
         reference_radius: 3.,
+        parameter_scale: 3.,
         reversed: false,
         u_range: None,
         v_range: None,

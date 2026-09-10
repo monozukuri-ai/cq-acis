@@ -56,10 +56,12 @@ pub enum GeometryError {
     ZeroVector,
     NegativeTolerance,
     InfiniteParameter,
+    InvalidFrame,
 }
 impl fmt::Display for GeometryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidFrame => write!(f, "invalid analytic surface frame or radius"),
             Self::ZeroVector => write!(f, "cannot normalize a zero-length vector"),
             Self::NegativeTolerance => write!(f, "tolerances must be non-negative"),
             Self::InfiniteParameter => {
@@ -204,5 +206,49 @@ impl TransformEntity {
                 self.matrix_values[10],
                 self.matrix_values[11],
             ))
+    }
+}
+
+impl crate::SphereSurfaceEntity {
+    /// Canonical longitude u and latitude v. This is not the serialized ACIS chart.
+    pub fn evaluate(&self, u: f64, v: f64) -> Result<Vec3, GeometryError> {
+        if !u.is_finite() || !v.is_finite() {
+            return Err(GeometryError::InfiniteParameter);
+        }
+        if !self.radius.is_finite() || self.radius == 0. {
+            return Err(GeometryError::InvalidFrame);
+        }
+        let z = self.pole.normalized()?;
+        let x = self.u_direction.normalized()?;
+        if !z.dot(x).is_finite() || z.dot(x).abs() > 1e-9 {
+            return Err(GeometryError::InvalidFrame);
+        }
+        let y = z.cross(x).normalized()?;
+        Ok(self.center + ((x * u.cos() + y * u.sin()) * v.cos() + z * v.sin()) * self.radius.abs())
+    }
+}
+impl crate::TorusSurfaceEntity {
+    /// Canonical ring angle u and tube angle v. Saved ranges remain source facts.
+    pub fn evaluate(&self, u: f64, v: f64) -> Result<Vec3, GeometryError> {
+        if !u.is_finite() || !v.is_finite() {
+            return Err(GeometryError::InfiniteParameter);
+        }
+        let z = self.axis.normalized()?;
+        let x = self.u_direction.normalized()?;
+        if !z.dot(x).is_finite() || z.dot(x).abs() > 1e-9 {
+            return Err(GeometryError::InvalidFrame);
+        }
+        let y = z.cross(x).normalized()?;
+        if !self.major_radius.is_finite()
+            || !self.minor_radius.is_finite()
+            || self.major_radius <= 0.
+            || self.minor_radius == 0.
+        {
+            return Err(GeometryError::InvalidFrame);
+        }
+        let r = self.minor_radius.abs();
+        Ok(self.center
+            + (x * u.cos() + y * u.sin()) * (self.major_radius + r * v.cos())
+            + z * (r * v.sin()))
     }
 }

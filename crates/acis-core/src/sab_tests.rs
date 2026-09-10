@@ -184,3 +184,330 @@ fn schema_extensions_remain_raw_instead_of_being_silently_ignored() {
         .iter()
         .any(|d| d.code == "sab.entity_schema_unsupported"));
 }
+
+fn real(fields: &mut Vec<u8>, x: f64) {
+    fields.push(6);
+    fields.extend_from_slice(&x.to_le_bytes());
+}
+fn vector(fields: &mut Vec<u8>, xyz: [f64; 3]) {
+    fields.push(19);
+    for x in xyz {
+        fields.extend_from_slice(&x.to_le_bytes());
+    }
+}
+#[test]
+fn analytic_sab_fields_preserve_scale_signed_radius_and_all_bytes() {
+    for width in [4, 8] {
+        let mut prefix = vec![12];
+        word(&mut prefix, -1, width);
+        let mut cone = prefix.clone();
+        for v in [[0., 0., 0.], [0., 0., 1.], [4., 0., 0.]] {
+            vector(&mut cone, v);
+        }
+        real(&mut cone, 0.5);
+        cone.extend([11, 11]);
+        for x in [0.6, -0.8, 13.] {
+            real(&mut cone, x);
+        }
+        cone.extend([11; 5]);
+        let parsed = parse(&fixture(width, 0, Some(("cone-surface", cone.clone())))).unwrap();
+        let Entity::ConeSurface(e) = &parsed.model.entities()[1] else {
+            panic!("cone not decoded")
+        };
+        assert_eq!(
+            (e.reference_radius, e.parameter_scale, e.cos_half_angle),
+            (4., 13., -0.8)
+        );
+        assert_eq!(e.evaluate(0., 5.).unwrap(), Vec3::from((7., 0., -4.)));
+        cone.push(11);
+        assert!(matches!(
+            parse(&fixture(width, 0, Some(("cone-surface", cone))))
+                .unwrap()
+                .model
+                .entities()[1],
+            Entity::Raw(_)
+        ));
+        let mut sphere = prefix.clone();
+        vector(&mut sphere, [1., 2., 3.]);
+        real(&mut sphere, -2.);
+        vector(&mut sphere, [1., 0., 0.]);
+        vector(&mut sphere, [0., 0., 1.]);
+        sphere.extend([11; 5]);
+        let doc = parse(&fixture(width, 0, Some(("sphere-surface", sphere)))).unwrap();
+        let Entity::SphereSurface(e) = &doc.model.entities()[1] else {
+            panic!("sphere not decoded")
+        };
+        assert_eq!(e.radius, -2.);
+        assert_eq!(e.pole, Vec3::from((0., 0., 1.)));
+        assert_eq!(e.evaluate(0., 0.).unwrap(), Vec3::from((3., 2., 3.)));
+        let mut torus = prefix;
+        vector(&mut torus, [0., 0., 0.]);
+        vector(&mut torus, [0., 0., 1.]);
+        real(&mut torus, 4.);
+        real(&mut torus, -1.);
+        vector(&mut torus, [1., 0., 0.]);
+        torus.extend([11; 5]);
+        let doc = parse(&fixture(width, 0, Some(("torus-surface", torus)))).unwrap();
+        let Entity::TorusSurface(e) = &doc.model.entities()[1] else {
+            panic!("torus not decoded")
+        };
+        assert_eq!(e.minor_radius, -1.);
+        assert_eq!(e.evaluate(0., 0.).unwrap(), Vec3::from((5., 0., 0.)));
+    }
+}
+
+// Independently specified quadratic rational quarter-circle, embedded profile
+// 22601. These are synthetic wire-format tests, not native vendor oracles.
+fn explicit_curve_values() -> Vec<AcisValue> {
+    use AcisValue::{Bytes as B, Float as F, Integer as I, Reference as R, String as S};
+    vec![
+        R(EntityRef(-1)),
+        B(vec![11]),
+        B(vec![15]),
+        S("exact_int_cur".into()),
+        I(22601.into()),
+        I(0.into()),
+        S("nurbs".into()),
+        I(2.into()),
+        I(0.into()),
+        I(2.into()),
+        F(0.),
+        I(2.into()),
+        F(1.),
+        I(2.into()),
+        F(1.),
+        F(0.),
+        F(0.),
+        F(1.),
+        F(1.),
+        F(1.),
+        F(0.),
+        F(0.5_f64.sqrt()),
+        F(0.),
+        F(1.),
+        F(0.),
+        F(1.),
+        F(0.),
+        S("null_surface".into()),
+        S("null_surface".into()),
+        S("nullbs".into()),
+        S("nullbs".into()),
+        B(vec![11]),
+        B(vec![11]),
+        I(0.into()),
+        I(0.into()),
+        I(0.into()),
+        I(0.into()),
+        B(vec![10]),
+        F(1.),
+        B(vec![10]),
+        F(0.),
+        I(0.into()),
+        I(0.into()),
+        B(vec![16]),
+        B(vec![10]),
+        F(0.),
+        B(vec![10]),
+        F(1.),
+    ]
+}
+fn encode_values(values: &[AcisValue], width: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for value in values {
+        match value {
+            AcisValue::Reference(v) => {
+                bytes.push(12);
+                word(&mut bytes, v.0, width);
+            }
+            AcisValue::Integer(v) => {
+                bytes.push(4);
+                word(&mut bytes, v.to_string().parse().unwrap(), width);
+            }
+            AcisValue::Float(v) => {
+                bytes.push(6);
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            AcisValue::String(s) => {
+                bytes.extend_from_slice(&[7, s.len() as u8]);
+                bytes.extend_from_slice(s.as_bytes());
+            }
+            AcisValue::Bytes(b) => bytes.extend_from_slice(b),
+            _ => panic!("unsupported test value"),
+        }
+    }
+    bytes
+}
+fn explicit_fixture(values: &[AcisValue], width: usize, version: i64) -> Vec<u8> {
+    let mut data = fixture(
+        width,
+        0,
+        Some(("intcurve-curve", encode_values(values, width))),
+    );
+    data[15..15 + width].copy_from_slice(&version.to_le_bytes()[..width]);
+    data
+}
+#[test]
+fn explicit_asm_curve_preserves_bytes_and_matches_rational_circle() {
+    for width in [4, 8] {
+        let values = explicit_curve_values();
+        let data = explicit_fixture(&values, width, 22700);
+        let model = parse(&data).unwrap().model;
+        let Entity::BSplineCurve(curve) = &model.entities()[1] else {
+            panic!("not decoded")
+        };
+        assert_eq!(curve.raw.values, values);
+        let span = curve.raw.source.as_ref().unwrap();
+        assert_eq!(
+            curve.raw.raw_data.as_deref(),
+            Some(&data[span.start_offset..span.end_offset])
+        );
+        for t in [0., 0.1, 0.5, 0.9, 1.] {
+            let p = curve.evaluate(t).unwrap();
+            assert!((p.x.hypot(p.y) - 1.).abs() < 1e-12);
+        }
+        assert!((curve.evaluate(0.5).unwrap().x - 0.5_f64.sqrt()).abs() < 1e-12);
+        assert_eq!(curve.multiplicities, vec![3, 3]);
+        assert!(curve.evaluate(-0.1).is_err());
+        assert!(curve.evaluate(f64::NAN).is_err());
+    }
+}
+#[test]
+fn unqualified_explicit_spline_records_stay_raw_with_source_diagnostics() {
+    let base = explicit_curve_values();
+    let mut cases = vec![];
+    for (index, value) in [
+        (1, AcisValue::Bytes(vec![10])),
+        (4, AcisValue::Integer(22602.into())),
+        (5, AcisValue::Integer(1.into())),
+        (7, AcisValue::Integer(usize::MAX.into())),
+        (8, AcisValue::Integer(2.into())),
+        (9, AcisValue::Integer(4097.into())),
+        (11, AcisValue::Integer(1000000.into())),
+        (21, AcisValue::Float(-1.)),
+        (26, AcisValue::Float(0.001)),
+        (27, AcisValue::String("plane".into())),
+        (41, AcisValue::Integer(1.into())),
+    ] {
+        let mut v = base.clone();
+        v[index] = value;
+        cases.push(v);
+    }
+    // Negative degree instead of usize::MAX is serializable in both word sizes.
+    cases[3][7] = AcisValue::Integer((-1).into());
+    let mut trailing = base.clone();
+    trailing.push(AcisValue::Integer(1.into()));
+    cases.push(trailing);
+    for values in cases {
+        let model = parse(&explicit_fixture(&values, 8, 22700)).unwrap().model;
+        assert!(matches!(&model.entities()[1],Entity::Raw(raw) if raw.values==values));
+        assert!(model
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == "sab.entity_schema_unsupported"));
+    }
+    let old = parse(&explicit_fixture(&base, 4, 22600)).unwrap();
+    assert!(matches!(old.model.entities()[1], Entity::Raw(_)));
+    for length in 0..base.len() {
+        let raw = RawEntity {
+            values: base[..length].to_vec(),
+            ..RawEntity::new(0, "intcurve-curve")
+        };
+        assert!(
+            !matches!(crate::asm_nurbs::decode(&raw, 22700), Ok(Some(_))),
+            "accepted prefix {length}"
+        );
+    }
+}
+
+#[test]
+fn explicit_asm_surface_decodes_tensor_order_and_refuses_trailer_changes() {
+    use AcisValue::{Bytes as B, Float as F, Integer as I, Reference as R, String as S};
+    let mut values = vec![
+        R(EntityRef(-1)),
+        B(vec![11]),
+        B(vec![15]),
+        S("exact_spl_sur".into()),
+        I(22601.into()),
+        I(0.into()),
+        S("nurbs".into()),
+        I(1.into()),
+        I(1.into()),
+        I(0.into()),
+        I(0.into()),
+        I(0.into()),
+        I(0.into()),
+        I(2.into()),
+        I(2.into()),
+    ];
+    for _ in 0..2 {
+        values.extend([F(0.), I(1.into()), F(1.), I(1.into())]);
+    }
+    for p in [
+        [0., 0., 0., 1.],
+        [2., 0., 0., 2.],
+        [0., 3., 0., 1.],
+        [2., 3., 4., 2.],
+    ] {
+        values.extend(p.map(F));
+    }
+    values.push(F(0.));
+    for _ in 0..6 {
+        values.push(I(0.into()));
+    }
+    values.push(B(vec![11]));
+    for _ in 0..2 {
+        values.extend([B(vec![10]), F(1.), B(vec![10]), F(0.)]);
+    }
+    values.extend([
+        I(0.into()),
+        B(vec![16]),
+        B(vec![11]),
+        B(vec![11]),
+        B(vec![11]),
+        B(vec![11]),
+    ]);
+    for width in [4, 8] {
+        let mut data = fixture(
+            width,
+            0,
+            Some(("spline-surface", encode_values(&values, width))),
+        );
+        data[15..15 + width].copy_from_slice(&22700_i64.to_le_bytes()[..width]);
+        let doc = parse(&data).unwrap();
+        let Entity::BSplineSurface(s) = &doc.model.entities()[1] else {
+            panic!("not decoded")
+        };
+        assert_eq!(s.raw.values, values);
+        for (u, v) in [(0., 0.), (1., 1.), (0.2, 0.7)] {
+            let p = s.evaluate(u, v).unwrap();
+            let a = 2. * u / (1. + u);
+            assert!(
+                (p.x - 2. * a).abs() < 1e-12
+                    && (p.y - 3. * v).abs() < 1e-12
+                    && (p.z - 4. * a * v).abs() < 1e-12
+            );
+        }
+    }
+    let raw = RawEntity {
+        values: values.clone(),
+        ..RawEntity::new(0, "spline-surface")
+    };
+    for length in 0..values.len() {
+        let mut truncated = raw.clone();
+        truncated.values.truncate(length);
+        assert!(!matches!(
+            crate::asm_nurbs::decode(&truncated, 22700),
+            Ok(Some(_))
+        ));
+    }
+    let mut future = raw.clone();
+    future.values.push(I(1.into()));
+    assert!(crate::asm_nurbs::decode(&future, 22700).is_err());
+    let mut finite = raw.clone();
+    let index = finite.values.len() - 4;
+    finite.values.splice(index..index + 1, [B(vec![10]), F(0.)]);
+    assert!(crate::asm_nurbs::decode(&finite, 22700).is_err());
+    let mut periodic = raw;
+    periodic.values[9] = I(2.into());
+    assert!(crate::asm_nurbs::decode(&periodic, 22700).is_err());
+}
