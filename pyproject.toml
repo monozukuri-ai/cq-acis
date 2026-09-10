@@ -7,7 +7,7 @@ name = "cq-acis"
 version = "0.3.1"
 description = "ACIS SAT/SAB parsing experiments for CadQuery"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "cadquery>=2.8",
     # These Windows wheels use different SWIG runtime tables. Loading versions
