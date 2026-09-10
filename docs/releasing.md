@@ -2,8 +2,19 @@
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds and
 publishes the **Python `cq-acis` distribution**. The `acis-core` Rust crate has
-its own publication lifecycle. Python builds use the checked-out workspace core;
-its source is included in the sdist, so source installs need no sibling checkout.
+its own publication lifecycle. Python builds use the pinned `acis-core` release
+from crates.io and the checked-out `acis-py-bridge`. The bridge source is included
+in the sdist, so source installs need no sibling checkout or separate bridge
+publication.
+
+Keep `Cargo.lock` resolved without local `[patch.crates-io]` overrides. The
+workspace tests its own `acis-core` source as well as using the registry crate
+through the Python binding, so the lockfile contains both package identities.
+An ignored `.cargo/config.toml` override can remove the registry entry when Cargo
+updates the lockfile; that file then fails CI's `--locked` builds. Run the release
+checks in a clean checkout without such overrides. If the lockfile needs repair,
+regenerate it there with `cargo generate-lockfile`, review the dependency changes,
+and commit the corrected `Cargo.lock` before tagging the release.
 
 ## Triggers and artifacts
 
@@ -89,8 +100,11 @@ choose a new version rather than replacing an existing release.
 Using Python 3.11 (latest patch) or newer for the release helpers, run:
 
 ```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 python -m unittest discover -s scripts/tests -v
-python scripts/check_python_release.py --tag v0.1.0  # use the checkout's version
+python scripts/check_python_release.py --tag v0.3.1  # use the checkout's version
 maturin build --release --locked --out wheel-check
 maturin sdist --out sdist-check
 python scripts/check_python_release.py --dist wheel-check
