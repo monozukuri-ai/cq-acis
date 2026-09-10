@@ -2,8 +2,19 @@
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds and
 publishes the **Python `cq-acis` distribution**. The `acis-core` Rust crate has
-its own publication lifecycle. Python builds use the checked-out workspace core;
-its source is included in the sdist, so source installs need no sibling checkout.
+its own publication lifecycle. Python builds use the pinned `acis-core` release
+from crates.io and the checked-out `acis-py-bridge`. The bridge source is included
+in the sdist, so source installs need no sibling checkout or separate bridge
+publication.
+
+Keep `Cargo.lock` resolved without local `[patch.crates-io]` overrides. The
+workspace tests its own `acis-core` source as well as using the registry crate
+through the Python binding, so the lockfile contains both package identities.
+An ignored `.cargo/config.toml` override can remove the registry entry when Cargo
+updates the lockfile; that file then fails CI's `--locked` builds. Run the release
+checks in a clean checkout without such overrides. If the lockfile needs repair,
+regenerate it there with `cargo generate-lockfile`, review the dependency changes,
+and commit the corrected `Cargo.lock` before tagging the release.
 
 ## Triggers and artifacts
 
@@ -15,11 +26,13 @@ its source is included in the sdist, so source installs need no sibling checkout
   jobs and stores artifacts, but never publishes to PyPI. To use this button,
   first merge the workflow into the default branch.
 
-The workflow produces Python 3.10 ABI3 wheels for Linux x86-64 (manylinux2014),
-Windows x86-64, macOS Apple Silicon, and macOS Intel, plus one source archive.
+The workflow produces ABI3 wheels for Linux x86-64 (manylinux2014), Windows
+x86-64, macOS Apple Silicon, and macOS Intel, plus one source archive. The native
+extension uses the CPython 3.10 stable ABI (`cp310-abi3`), but the package requires
+Python 3.11 or newer to match [CadQuery 2.8](https://pypi.org/project/cadquery/2.8.0/).
 Rust 1.93.0 and maturin 1.11.5 are pinned. This is a release toolchain, not an MSRV
 compatibility test. Each wheel is installed with its dependencies in fresh Python
-3.10 and 3.11 environments. Native import, SAT/SAB decoding, model round trips,
+3.11 and 3.12 environments. Native import, SAT/SAB decoding, model round trips,
 and a valid CadQuery cube are checked outside the source checkout. The sdist is
 also rebuilt and installed in an isolated environment. The source regression
 suite and Rust checks must pass before packaging starts.
@@ -37,7 +50,7 @@ interpreter shutdown after `import cadquery`, even when geometry checks pass
 [CadQuery issue #1564](https://github.com/CadQuery/cadquery/issues/1564)). These
 constraints apply to end-user installs as well as CI. Revisit them when fixed
 upstream Windows wheels are available and verify a normal process exit on both
-Python 3.10 and 3.11 before removing them.
+Python 3.11 and 3.12 before removing them.
 
 Only verified files are collected in the final `publish` job. That job alone
 has `id-token: write`. It uses PyPI Trusted Publishing; no long-lived API token
@@ -89,13 +102,16 @@ choose a new version rather than replacing an existing release.
 Using Python 3.11 (latest patch) or newer for the release helpers, run:
 
 ```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 python -m unittest discover -s scripts/tests -v
-python scripts/check_python_release.py --tag v0.1.0  # use the checkout's version
+python scripts/check_python_release.py --tag v0.3.1  # use the checkout's version
 maturin build --release --locked --out wheel-check
 maturin sdist --out sdist-check
 python scripts/check_python_release.py --dist wheel-check
 python scripts/check_python_release.py --dist sdist-check --wheels 0 --sdists 1
-python scripts/smoke_python_release.py --dist wheel-check --python python3.10 --python python3.11
+python scripts/smoke_python_release.py --dist wheel-check --python python3.11 --python python3.12
 python scripts/smoke_python_release.py --dist sdist-check --sdist
 ```
 

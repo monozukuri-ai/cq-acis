@@ -164,9 +164,10 @@ diagnostic targets are also rejected. Unknown entity classes/values must be
 represented by `RawEntity`/bytes instead of being silently dropped.
 
 The [maturin](https://www.maturin.rs/project_layout.html) build creates a mixed
-Python/Rust wheel with the CPython stable ABI for Python 3.10+. Wheel installation
-does not need Rust; source installation does. CadQuery's own platform/Python
-requirements still apply. An abi3 tag alone does not demonstrate testing on
+Python/Rust wheel using the CPython 3.10 stable ABI. The package requires
+**Python 3.11 or newer** because it depends on CadQuery 2.8+. Wheel installation
+does not need Rust; source installation does. CadQuery's platform requirements
+still apply. An abi3 tag alone does not demonstrate testing on
 every Python version or operating system.
 
 ## Example and visual inspection

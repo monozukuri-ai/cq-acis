@@ -147,7 +147,8 @@ shapes = convert_model(native)
 
 配布は [maturin](https://www.maturin.rs/project_layout.html) に変更しました。
 wheelのインストールにはRustは不要です。ソースビルドにはRust 1.83以降とCリンカが必要です。
-拡張はPython 3.10以降向けのCPython stable ABIを使いますが、CadQuery側の対応環境も必要です。
+拡張はCPython 3.10のstable ABIを使いますが、依存先のCadQuery 2.8以降に合わせ、
+パッケージの利用には **Python 3.11以降** が必要です。CadQuery側の対応OSも確認してください。
 abi3タグは全Pythonバージョン・OSでの動作確認を意味しません。
 
 ## パース例と3D確認
