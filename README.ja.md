@@ -1,6 +1,6 @@
 # cq-acis
 
-開発中の[トレラント境界・有限 UV トリム対応](docs/tolerant-trims.ja.md)には、追加範囲と残る変換制限を記載しています。
+0.3.3 の[トレラント境界・有限 UV トリム対応](docs/tolerant-trims.ja.md)には、追加範囲と残る変換制限を記載しています。
 
 ACIS SAT/SABデータを解析し、対応する解析的B-repのサブセットを
 CadQuery/OpenCascade shapeへ変換するパッケージです。
@@ -31,8 +31,7 @@ ASM 22700 / 内部 22601 の直接 NURBS、証明できる円錐の縮退辺、�
 二つの同軸楕円断面で囲まれた楕円円錐にも限定対応しています。
 非相似の配置、他の未解釈 subtype は拒否します。
 対応範囲・検証限界は [M4 の仕様](docs/m4-geometry.md)を参照してください。
-0.3.0 開発版は model API 2 と core / bridge 0.2.0 を要求します。
-新しい crate / Python パッケージの公開は別作業です。
+0.3.3 は model API 2 を維持し、同じ 0.3.3 の core / bridge を使用します。
 
 ## インストール
 

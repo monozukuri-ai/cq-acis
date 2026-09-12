@@ -78,13 +78,13 @@ protections still apply. See [PyPI's setup instructions](https://docs.pypi.org/t
 
 ## Cutting the next release
 
-Choose a new shared version unused on both crates.io and PyPI. The failed
-`v0.3.1` tag predates these fixes; the next release is `v0.3.2`.
+Choose a new shared version unused on both crates.io and PyPI. The version
+prepared in this checkout is `v0.3.3`.
 
 1. In the root `Cargo.toml`, update `[workspace.package].version` and the two
    exact version pins under `[workspace.dependencies]` to the same number.
    Run `cargo generate-lockfile` and `uv lock`, then
-   `python scripts/check_python_release.py --tag v0.3.2` using the new version.
+   `python scripts/check_python_release.py --tag v0.3.3` using the new version.
    No Python version field needs editing. The uv cache keys include the Cargo
    manifests so Rust version changes invalidate cached Python build metadata.
 2. Commit the version/lockfile and workflow changes. Run **Python release**
@@ -93,7 +93,7 @@ Choose a new shared version unused on both crates.io and PyPI. The failed
    at the new version. Downstream Rust projects must update their exact pins
    after these packages are available on crates.io.
 4. Create the matching tag, then publish a GitHub Release for that tag. For example,
-   workspace version `0.3.2` uses tag `v0.3.2`.
+   workspace version `0.3.3` uses tag `v0.3.3`.
 5. Check the final **Publish verified distributions to PyPI** job. A successful
    build or manual workflow run alone does not mean a package was published.
 
@@ -113,7 +113,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 python -m unittest discover -s scripts/tests -v
-python scripts/check_python_release.py --tag v0.3.2  # use the checkout's version
+python scripts/check_python_release.py --tag v0.3.3  # use the checkout's version
 maturin build --release --locked --out wheel-check
 maturin sdist --out sdist-check
 python scripts/check_python_release.py --dist wheel-check

@@ -2,9 +2,9 @@
 
 English | [日本語](tolerant-trims.ja.md)
 
-This development change extends the observed ASM 22700 / embedded 22601
-profile. It is not present in the published 0.3.2 packages. Use the matching
-development core, bridge, Python extension and converter together.
+Version 0.3.3 extends the observed ASM 22700 / embedded 22601 profile.
+These additions are not present in 0.3.2. Use the matching 0.3.3 core,
+bridge, Python extension and converter together.
 
 ## Admitted geometry
 

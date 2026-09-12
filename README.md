@@ -36,7 +36,7 @@ elliptical-cone isosections. Other native spline profiles and non-similarity
 placements remain unsupported. Projected 2D trims are numerically checked against unchanged 3D
 curves at source precision. See [M4 scope and validation](docs/m4-geometry.md).
 Partial tolerant topology and nested subtype views keep model API 2.
-The development extension for [tolerant boundaries and finite UV trims](docs/tolerant-trims.md)
+The 0.3.3 extension for [tolerant boundaries and finite UV trims](docs/tolerant-trims.md)
 documents its admitted profiles and remaining conversion limits.
 From 0.3.2, `cq-acis`, `acis-core`, and `acis-py-bridge` share the workspace
 version. Python builds bundle the matching core and bridge sources; downstream
