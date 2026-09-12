@@ -579,6 +579,12 @@ fn explicit_asm_surface_decodes_tensor_order_and_refuses_trailer_changes() {
     let mut finite = raw.clone();
     let index = finite.values.len() - 4;
     finite.values.splice(index..index + 1, [B(vec![10]), F(0.)]);
+    let Some(Entity::BSplineSurface(surface)) = crate::asm_nurbs::decode(&finite, 22700).unwrap()
+    else {
+        panic!("finite chart not decoded")
+    };
+    assert_eq!(surface.u_range.unwrap().lower, Some(0.));
+    finite.values[index + 1] = F(-0.1);
     assert!(crate::asm_nurbs::decode(&finite, 22700).is_err());
     let mut periodic = raw;
     periodic.values[9] = I(2.into());

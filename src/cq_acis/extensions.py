@@ -4,7 +4,7 @@ Saved tolerant scalars have incomplete semantics. They are not effective OCCT
 tolerances. Subtype extents are indices into RawEntity.values, not byte offsets.
 """
 from dataclasses import dataclass
-from .model import CoedgeEntity, EdgeEntity, VertexEntity, ModelEntity
+from .model import CoedgeEntity, EdgeEntity, VertexEntity, ModelEntity, RawEntity
 from .tokens import EntityRef
 
 
@@ -57,3 +57,12 @@ class SubtypeTable:
 class ResolvedSubtype:
     geometry: ModelEntity
     definition: SubtypeDefinition
+
+
+@dataclass(frozen=True, slots=True)
+class LinearSurfacePcurve:
+    raw: RawEntity
+    parameter_interval: tuple[float, float]
+    uv_endpoints: tuple[tuple[float, float], tuple[float, float]]
+    fit_tolerance: float
+    support: SubtypeDefinition

@@ -237,14 +237,9 @@ pub(crate) fn decode(raw: &RawEntity, save_version: u32) -> Result<Option<Entity
         r.byte(0x10)?;
         let u_range = r.range()?;
         let v_range = r.range()?;
-        // Finite outer surface ranges need additional saved-chart qualification.
-        if [u_range, v_range]
-            .iter()
-            .flatten()
-            .any(|range| range.lower.is_some() || range.upper.is_some())
-        {
-            return Err("finite ASM surface ranges are not qualified".into());
-        }
+        // In this forward, explicit chart the saved bounds use the knot
+        // parameters unchanged. validate() requires a nonempty subdomain;
+        // the consumer must also keep every face trim inside these bounds.
         let surface = BSplineSurfaceEntity {
             raw: raw.clone(),
             pattern,
@@ -270,4 +265,108 @@ pub(crate) fn decode(raw: &RawEntity, save_version: u32) -> Result<Option<Entity
         return Err("unconsumed ASM spline trailer".into());
     }
     Ok(Some(entity))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn surface() -> RawEntity {
+        use AcisValue::{Bytes as B, Float as F, Integer as I, String as S};
+        let mut raw = RawEntity::new(7, "spline-surface");
+        raw.values = vec![
+            AcisValue::Reference(crate::NULL_REF),
+            B(vec![11]),
+            B(vec![15]),
+            S("exact_spl_sur".into()),
+            I(22601.into()),
+            I(0.into()),
+            S("nurbs".into()),
+            I(1.into()),
+            I(1.into()),
+            I(0.into()),
+            I(0.into()),
+            I(0.into()),
+            I(0.into()),
+            I(2.into()),
+            I(2.into()),
+        ];
+        for _ in 0..2 {
+            raw.values.extend([F(0.), I(1.into()), F(1.), I(1.into())]);
+        }
+        for (x, y, z, w) in [
+            (0., 0., 0., 1.),
+            (2., 0., 0., 2.),
+            (0., 3., 0., 1.),
+            (2., 3., 4., 2.),
+        ] {
+            raw.values.extend([F(x), F(y), F(z), F(w)]);
+        }
+        raw.values.push(F(0.));
+        raw.values.extend((0..6).map(|_| I(0.into())));
+        raw.values.push(B(vec![11]));
+        for _ in 0..2 {
+            raw.values.extend([B(vec![10]), F(1.), B(vec![10]), F(0.)]);
+        }
+        raw.values.extend([I(0.into()), B(vec![16])]);
+        for bound in [0.2, 0.8, 0.25, 0.75] {
+            raw.values.extend([B(vec![10]), F(bound)]);
+        }
+        raw
+    }
+
+    #[test]
+    fn finite_explicit_chart_retains_source_and_rational_geometry() {
+        let raw = surface();
+        let Some(Entity::BSplineSurface(s)) = decode(&raw, 22700).unwrap() else {
+            panic!()
+        };
+        assert_eq!(s.raw, raw);
+        assert_eq!(
+            s.u_range,
+            Some(ParameterRange {
+                lower: Some(0.2),
+                upper: Some(0.8)
+            })
+        );
+        assert_eq!(
+            s.v_range,
+            Some(ParameterRange {
+                lower: Some(0.25),
+                upper: Some(0.75)
+            })
+        );
+        let p = s.evaluate(0.5, 0.5).unwrap();
+        assert!((p.x - 4. / 3.).abs() < 1e-12);
+        assert!((p.y - 1.5).abs() < 1e-12);
+        assert!((p.z - 4. / 3.).abs() < 1e-12);
+        assert!(decode(&raw, 22600).unwrap().is_none());
+    }
+
+    #[test]
+    fn finite_chart_never_accepts_bad_bounds_or_extended_profiles() {
+        let raw = surface();
+        for length in 4..raw.values.len() {
+            let mut changed = raw.clone();
+            changed.values.truncate(length);
+            assert!(decode(&changed, 22700).is_err());
+        }
+        for value in [-0.01, 0.8, 1.1, f64::NAN, f64::INFINITY] {
+            let mut changed = raw.clone();
+            let pos = changed.values.len() - 7;
+            changed.values[pos] = AcisValue::Float(value);
+            assert!(decode(&changed, 22700).is_err());
+        }
+        for (pos, value) in [
+            (1, AcisValue::Bytes(vec![10])),
+            (4, AcisValue::Integer(22602.into())),
+        ] {
+            let mut changed = raw.clone();
+            changed.values[pos] = value;
+            assert!(decode(&changed, 22700).is_err());
+        }
+        let mut changed = raw;
+        changed.values.push(AcisValue::Integer(0.into()));
+        assert!(decode(&changed, 22700).is_err());
+    }
 }

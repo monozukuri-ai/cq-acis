@@ -3,7 +3,7 @@
 from ._native import NativeModel
 from .extensions import (
     TolerantVertex, TolerantEdge, TolerantCoedge, SubtypeDefinition,
-    SubtypeReference, SubtypeTable, ResolvedSubtype,
+    SubtypeReference, SubtypeTable, ResolvedSubtype, LinearSurfacePcurve,
 )
 from .sab import parse_sab_model
 from .model import (
@@ -77,6 +77,7 @@ from .cadquery import (
 __all__ = [
     "TolerantVertex", "TolerantEdge", "TolerantCoedge", "SubtypeDefinition",
     "SubtypeReference", "SubtypeTable", "ResolvedSubtype",
+    "LinearSurfacePcurve",
     "parse_sab_model",
     "NativeModel",
     "AcisDiagnostic",

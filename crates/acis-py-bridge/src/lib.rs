@@ -13,7 +13,10 @@ mod entities;
 mod extensions;
 use entities::*;
 pub use entities::{read_entity as entity_from_python, write_entity as entity_to_python};
-pub use extensions::{resolved_subtype_to_python, subtype_table_to_python, tolerant_to_python};
+pub use extensions::{
+    linear_surface_pcurve_to_python, resolved_subtype_to_python, subtype_table_to_python,
+    tolerant_to_python,
+};
 
 /// Version of the Python dataclass layout, independent of crate/package versions.
 pub const MODEL_API_VERSION: u32 = 2;

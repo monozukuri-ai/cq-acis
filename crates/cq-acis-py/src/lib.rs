@@ -133,6 +133,38 @@ impl NativeModel {
             acis_py_bridge::resolved_subtype_to_python,
         )
     }
+    fn linear_surface_pcurve<'py>(
+        &self,
+        reference: &Bound<'py, PyAny>,
+        surface: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = reference.py();
+        let Some(pcurve) = self
+            .inner
+            .resolve(reference_from_python(reference)?)
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        let Some(surface) = self
+            .inner
+            .resolve(reference_from_python(surface)?)
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        let resolver = self
+            .subtypes
+            .get_or_init(|| acis_core::subtypes::SubtypeResolver::new(Arc::clone(&self.inner)));
+        let view = resolver
+            .linear_surface_pcurve(pcurve.index(), surface.index())
+            .map_err(model_error)?;
+        optional_to_py(
+            py,
+            view.as_ref(),
+            acis_py_bridge::linear_surface_pcurve_to_python,
+        )
+    }
     fn __repr__(&self) -> String {
         format!(
             "NativeModel(entities={}, bodies={})",

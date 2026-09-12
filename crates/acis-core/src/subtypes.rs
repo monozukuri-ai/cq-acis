@@ -230,6 +230,13 @@ impl SubtypeResolver {
             entity_index,
         )
     }
+    pub fn linear_surface_pcurve(
+        &self,
+        pcurve: usize,
+        surface: usize,
+    ) -> Result<Option<crate::pcurve::LinearSurfacePcurve>, String> {
+        crate::pcurve::decode(&self.model, &self.table, pcurve, surface)
+    }
 }
 
 /// Resolve a top-level geometry alias through the indexed definition. Nested

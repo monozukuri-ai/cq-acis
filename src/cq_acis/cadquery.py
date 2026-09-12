@@ -224,10 +224,14 @@ class CadQueryConverter:
         self.degenerate_edges: list[dict] = []
         self.analytic_trim_faces: list[dict] = []
         self.tolerant_endpoints: list[dict] = []
+        self.tolerant_boundaries: list[dict] = []
+        self.bounded_surface_faces: list[dict] = []
+        self.saved_pcurves: list[dict] = []
         self.resolved_subtypes: list[dict] = []
         self.subtype_failures: dict[int, str] = {}
         self._extension_native = None
         self._geometry_cache = {}
+        self._topology_views = {}
         self.pcurve_count = 0
 
     def _native_extensions(self):
@@ -265,6 +269,13 @@ class CadQueryConverter:
         context: str,
     ) -> EntityT:
         entity = self.model.resolve(reference)
+        if isinstance(entity, RawEntity) and expected_type in (EdgeEntity, CoedgeEntity):
+            from .extensions import TolerantEdge, TolerantCoedge
+            view = self._tolerant_view(entity.index, context=context)
+            if expected_type is EdgeEntity and isinstance(view, TolerantEdge):
+                entity = view.edge
+            elif expected_type is CoedgeEntity and isinstance(view, TolerantCoedge):
+                entity = view.coedge
         if not isinstance(entity, expected_type):
             if entity is None:
                 actual = "null"
@@ -279,6 +290,18 @@ class CadQueryConverter:
                 else "geometry.conversion_failed"
             )
         return entity
+
+    def _tolerant_view(self, reference, *, context):
+        from .model import AcisModelError
+        index = reference.index if isinstance(reference, EntityRef) else reference
+        if index not in self._topology_views:
+            try:
+                self._topology_views[index] = self._native_extensions().tolerant_topology(index)
+            except AcisModelError as error:
+                raise CadQueryConversionError(
+                    f"{context}: {error}", code="geometry.tolerant_topology_unsupported"
+                ) from error
+        return self._topology_views[index]
 
     def _linked_entities(
         self,
@@ -336,6 +359,12 @@ class CadQueryConverter:
                 )
             coedges.append(coedge)
             current = coedge.next_coedge
+        if any(c.index in self._topology_views for c in coedges):
+            for previous, coedge in zip(coedges[-1:] + coedges[:-1], coedges):
+                if coedge.previous_coedge.index != previous.index:
+                    raise CadQueryConversionError(
+                        f"loop ${loop.index}: inconsistent previous coedge",
+                        code="geometry.tolerant_topology_mismatch")
         return tuple(coedges)
 
     def _body_placement(self, body: BodyEntity) -> _Placement:
@@ -360,7 +389,10 @@ class CadQueryConverter:
         return _Placement(transform, unit_scale)
 
     def _vertex_location(self, reference: EntityRef, *, context: str) -> Vec3:
-        vertex = self._require(reference, VertexEntity, context=context)
+        from .extensions import TolerantVertex
+        entity = self.model.resolve(reference)
+        view = self._tolerant_view(reference, context=context) if isinstance(entity, RawEntity) else None
+        vertex = view.vertex if isinstance(view, TolerantVertex) else self._require(reference, VertexEntity, context=context)
         point = self._require(
             vertex.point, PointEntity, context=f"vertex ${vertex.index}"
         )
@@ -377,12 +409,29 @@ class CadQueryConverter:
         return self.cq.Edge(TopoDS.Edge_s(edge.wrapped.Reversed()))
 
     def _straight_edge(
-        self, edge: EdgeEntity, coedge: CoedgeEntity, placement: _Placement
+        self, edge: EdgeEntity, coedge: CoedgeEntity, placement: _Placement, curve=None
     ):
         if edge.start_vertex.is_null or edge.end_vertex.is_null:
             raise CadQueryConversionError(
                 f"edge ${edge.index}: straight edge requires two vertices"
             )
+        if curve is not None:
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+            from OCP.Geom import Geom_Line
+            from OCP.gp import gp_Dir, gp_Pnt
+            direction = placement.vector(curve.direction)
+            if direction.magnitude <= 0 or not math.isfinite(direction.magnitude):
+                raise CadQueryConversionError("invalid tolerant line direction",
+                                              code="geometry.tolerant_parameter_mismatch")
+            origin = placement.point(curve.origin)
+            line = Geom_Line(gp_Pnt(*origin), gp_Dir(direction.x, direction.y, direction.z))
+            sign = -1 if edge.reversed else 1
+            parameters = [sign * t * direction.magnitude for t in (edge.start_parameter, edge.end_parameter)]
+            builder = BRepBuilderAPI_MakeEdge(line, min(parameters), max(parameters))
+            if not builder.IsDone():
+                raise CadQueryConversionError("tolerant source line construction failed")
+            result = self.cq.Edge(builder.Edge())
+            return self._reverse_edge(result) if edge.reversed ^ coedge.reversed else result
         start = self._vertex_point(
             edge.start_vertex, placement, context=f"edge ${edge.index} start"
         )
@@ -512,12 +561,20 @@ class CadQueryConverter:
         return result
 
     def _edge(self, coedge: CoedgeEntity, placement: _Placement):
+        if coedge.raw.type_name == "tcoedge-coedge":
+            self._tolerant_view(coedge.index, context="tolerant coedge")
         edge = self._require(
             coedge.edge, EdgeEntity, context=f"coedge ${coedge.index}"
         )
         curve = self._resolve_geometry(edge.curve)
+        tolerant = (edge.index in self._topology_views or coedge.index in self._topology_views
+                or (isinstance(curve, (EllipseCurveEntity, StraightCurveEntity))
+                    and any(isinstance(self.model.resolve(v), RawEntity)
+                            for v in (edge.start_vertex, edge.end_vertex))))
+        if tolerant:
+            self._check_tolerant_boundary(edge, coedge, curve, placement)
         if isinstance(curve, StraightCurveEntity):
-            return self._straight_edge(edge, coedge, placement)
+            return self._straight_edge(edge, coedge, placement, curve if tolerant else None)
         if isinstance(curve, EllipseCurveEntity):
             return self._ellipse_edge(edge, coedge, curve, placement)
         if isinstance(curve, BSplineCurveEntity):
@@ -537,6 +594,82 @@ class CadQueryConverter:
         raise CadQueryConversionError(
             f"edge ${edge.index} curve: unsupported geometry {actual}", code="geometry.curve_unsupported"
         )
+
+    def _check_tolerant_boundary(self, edge, coedge, curve, placement):
+        """Admit only saved 3D curves already consistent at the model resabs.
+
+        Local tolerant scalars remain uninterpreted. Inline coedge curves are
+        rejected by the native decoder. UV curves are derived and checked on
+        the face support, as for ordinary edges; saved pcurves are not decoded.
+        """
+        from .extensions import TolerantCoedge
+        if not isinstance(curve, (StraightCurveEntity, EllipseCurveEntity, BSplineCurveEntity)):
+            raise CadQueryConversionError(
+                f"edge ${edge.index}: tolerant boundary needs an explicit line, ellipse or spline",
+                code="geometry.tolerant_topology_unsupported")
+        parameters = (edge.start_parameter, edge.end_parameter)
+        if (any(t is None or not math.isfinite(t) for t in parameters)
+                or parameters[0] >= parameters[1]):
+            raise CadQueryConversionError("invalid tolerant edge interval",
+                                          code="geometry.tolerant_parameter_mismatch")
+        if (isinstance(curve, EllipseCurveEntity)
+                and parameters[1] - parameters[0] > 2 * math.pi + 64 * math.ulp(2 * math.pi)):
+            raise CadQueryConversionError("multiple-turn tolerant ellipse is not qualified",
+                                          code="geometry.tolerant_parameter_mismatch")
+        if (isinstance(curve, EllipseCurveEntity) and edge.start_vertex == edge.end_vertex
+                and abs(parameters[1] - parameters[0] - 2 * math.pi) > 1e-10):
+            raise CadQueryConversionError("closed tolerant ellipse lacks a full saved turn",
+                                          code="geometry.tolerant_parameter_mismatch")
+        sign = -1 if edge.reversed else 1
+        vertices = (edge.start_vertex, edge.end_vertex)
+        expected = [placement.point_vector(self._vertex_location(v, context="tolerant boundary"))
+                    for v in vertices]
+        deviations = []
+
+        def check(parameter, point):
+            try:
+                if curve.parameter_range is not None:
+                    domain = curve.parameter_range
+                    if ((domain.lower is not None and parameter < domain.lower)
+                            or (domain.upper is not None and parameter > domain.upper)):
+                        raise ValueError("tolerant trim outside saved curve domain")
+                source_point = (curve.origin + curve.direction * parameter
+                                if isinstance(curve, StraightCurveEntity) else curve.evaluate(parameter))
+                actual = placement.point_vector(source_point)
+            except (ValueError, OverflowError) as error:
+                raise CadQueryConversionError(str(error), code="geometry.tolerant_parameter_mismatch") from error
+            deviation = (actual - point).magnitude
+            if not math.isfinite(deviation) or deviation > self.tolerance:
+                raise CadQueryConversionError(
+                    f"edge ${edge.index}: tolerant boundary disagrees with saved vertex "
+                    f"({deviation:.9g} mm; model tolerance {self.tolerance:.9g} mm)",
+                    code="geometry.tolerant_endpoint_mismatch")
+            deviations.append(deviation)
+
+        for parameter, point in zip(parameters, expected):
+            check(sign * parameter, point)
+        view = self._topology_views.get(coedge.index)
+        if isinstance(view, TolerantCoedge):
+            if view.parameter_interval[0] >= view.parameter_interval[1]:
+                raise CadQueryConversionError("empty tolerant coedge interval",
+                                              code="geometry.tolerant_parameter_mismatch")
+            direction = -1 if coedge.reversed else 1
+            interval = sorted(direction * t for t in parameters)
+            # The observed saved intervals are independently rounded (up to
+            # 6.1e-12). Also check actual 3D endpoints below at model precision.
+            if any(abs(a - b) > 1e-10 for a, b in zip(interval, view.parameter_interval)):
+                raise CadQueryConversionError("coedge interval differs from its saved edge",
+                                              code="geometry.tolerant_parameter_mismatch")
+            if coedge.reversed:
+                expected.reverse()
+                sign *= -1
+            for parameter, point in zip(view.parameter_interval, expected):
+                check(sign * parameter, point)
+        self.tolerant_boundaries.append({
+            "edge": edge.index, "coedge": coedge.index, "curve": curve.index,
+            "max_endpoint_deviation_mm": max(deviations), "tolerance_mm": self.tolerance,
+            "method": "saved 3D curve and oriented endpoints; no local tolerance increase",
+        })
 
     def _bspline_edge(self, edge, coedge, curve, placement):
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
@@ -608,7 +741,42 @@ class CadQueryConverter:
             raise CadQueryConversionError("OCCT B-spline edge construction failed") from error
         return self._reverse_edge(result) if edge.reversed ^ coedge.reversed else result
 
-    def _attach_surface_pcurves(self, edges: tuple, geometry, *, loop_index: int) -> None:
+    def _saved_surface_pcurve(self, coedge, geometry, first, last, reverse_3d):
+        from .model import AcisModelError
+        from OCP.Geom2d import Geom2d_BSplineCurve
+        from OCP.TColgp import TColgp_Array1OfPnt2d
+        from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+        from OCP.gp import gp_Pnt2d
+        if coedge is None or coedge.pcurve.is_null or not hasattr(geometry, "source_surface"):
+            return None, None
+        try:
+            view = self._native_extensions().linear_surface_pcurve(coedge.pcurve, geometry.source_surface)
+        except AcisModelError as error:
+            raise CadQueryConversionError(str(error), code="geometry.saved_pcurve_unsupported") from error
+        if view is None:
+            return None, None
+        edge = self._require(coedge.edge, EdgeEntity, context="saved pcurve")
+        sign = -1 if coedge.reversed else 1
+        if edge.start_parameter is None or edge.end_parameter is None:
+            raise CadQueryConversionError("saved pcurve needs source edge parameters",
+                                          code="geometry.saved_pcurve_parameter_mismatch")
+        mapped = sorted(sign * t for t in (edge.start_parameter, edge.end_parameter))
+        if max(abs(a - b) for a, b in zip(mapped, view.parameter_interval)) > 1e-10:
+            raise CadQueryConversionError("saved pcurve and edge intervals differ",
+                                          code="geometry.saved_pcurve_parameter_mismatch")
+        poles = TColgp_Array1OfPnt2d(1, 2)
+        knots = TColStd_Array1OfReal(1, 2)
+        mults = TColStd_Array1OfInteger(1, 2)
+        # Affine reparameterization preserves the saved straight UV locus.
+        # It also handles OCCT's normalized line parameter and coedge direction.
+        points = view.uv_endpoints[::-1] if reverse_3d else view.uv_endpoints
+        for i, (t, uv) in enumerate(zip((first, last), points), 1):
+            poles.SetValue(i, gp_Pnt2d(*uv))
+            knots.SetValue(i, t)
+            mults.SetValue(i, 2)
+        return Geom2d_BSplineCurve(poles, knots, mults, 1, False), view
+
+    def _attach_surface_pcurves(self, edges: tuple, geometry, *, loop_index: int, coedges=None) -> None:
         """Derive UV trims from unchanged 3D curves, within the source tolerance."""
         from OCP.Adaptor3d import Adaptor3d_CurveOnSurface
         from OCP.BRep import BRep_Builder, BRep_Tool
@@ -628,14 +796,18 @@ class CadQueryConverter:
         loop_start = None
         location = TopLoc_Location()
         parameter_tolerance = self.tolerance / max(geometry.radius, 1.0)
-        for edge in edges:
+        for i, edge in enumerate(edges):
             adaptor = BRepAdaptor_Curve(edge.wrapped)
             first, last = adaptor.FirstParameter(), adaptor.LastParameter()
             if not math.isfinite(first + last) or last <= first:
                 raise CadQueryConversionError("invalid boundary parameter range")
             curve = BRep_Tool.Curve_s(edge.wrapped, first, last)
             try:
-                pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, self.tolerance * 0.1)
+                coedge = coedges[i] if coedges is not None else None
+                pcurve, saved = self._saved_surface_pcurve(
+                    coedge, geometry, first, last, edge.wrapped.Orientation() == TopAbs_REVERSED)
+                if pcurve is None:
+                    pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, self.tolerance * 0.1)
                 if pcurve is None:
                     raise ValueError("projection returned no curve")
                 start, end = pcurve.Value(first), pcurve.Value(last)
@@ -652,6 +824,8 @@ class CadQueryConverter:
                                 f"loop ${loop_index}: projected pcurves do not connect",
                                 code="geometry.pcurve_connection")
                 pcurve.Translate(gp_Vec2d(*shift))
+                if getattr(geometry, "uv_bounds", None) is not None:
+                    self._check_uv_trim(pcurve, first, last, geometry.uv_bounds, loop_index)
                 # OCCT's projector can return an approximation and its output
                 # tolerance is not exposed by the Python binding. Independently
                 # bound same-parameter deviation before attaching that curve.
@@ -660,10 +834,18 @@ class CadQueryConverter:
                     Geom2dAdaptor_Curve(pcurve, first, last), GeomAdaptor_Surface(surface)))
                 if not check.IsDone() or not math.isfinite(check.MaxDistance()) or check.MaxDistance() > self.tolerance:
                     raise CadQueryConversionError(
-                        f"loop ${loop_index}: projected 2D/3D curves exceed source tolerance",
+                        f"loop ${loop_index}: {'saved' if saved is not None else 'projected'} 2D/3D "
+                        f"trim exceeds source tolerance ({check.MaxDistance() if check.IsDone() else 'unchecked'} "
+                        f"mm; model tolerance {self.tolerance:.9g} mm)",
                         code="geometry.pcurve_mismatch")
                 self.pcurve_max_deviation = max(self.pcurve_max_deviation, check.MaxDistance())
                 self.pcurve_count += 1
+                if saved is not None:
+                    self.saved_pcurves.append({"pcurve": saved.raw.index, "coedge": coedge.index,
+                        "surface": geometry.source_surface, "support_subtype": saved.support.index,
+                        "max_deviation_mm": check.MaxDistance(), "tolerance_mm": self.tolerance,
+                        "saved_fit_tolerance_source_units": saved.fit_tolerance,
+                        "method": "saved linear UV curve; same spline support and 3D deviation checked"})
                 builder = BRep_Builder()
                 builder.UpdateEdge(edge.wrapped, pcurve, surface, location, self.tolerance)
                 builder.Range(edge.wrapped, surface, location, first, last)
@@ -689,16 +871,46 @@ class CadQueryConverter:
                 raise CadQueryConversionError(
                     f"loop ${loop_index}: projected pcurves do not close", code="geometry.pcurve_connection")
 
+    @staticmethod
+    def _check_uv_trim(pcurve, first, last, bounds, loop_index):
+        from OCP.Bnd import Bnd_Box2d
+        from OCP.BndLib import BndLib_Add2dCurve
+        from OCP.Geom2dAdaptor import Geom2dAdaptor_Curve
+        from OCP.GeomAbs import (GeomAbs_Line, GeomAbs_Circle, GeomAbs_Ellipse,
+                                 GeomAbs_Parabola, GeomAbs_Hyperbola,
+                                 GeomAbs_BezierCurve, GeomAbs_BSplineCurve)
+        if Geom2dAdaptor_Curve(pcurve).GetType() not in (
+                GeomAbs_Line, GeomAbs_Circle, GeomAbs_Ellipse, GeomAbs_Parabola,
+                GeomAbs_Hyperbola, GeomAbs_BezierCurve, GeomAbs_BSplineCurve):
+            raise CadQueryConversionError("unqualified spline trim bound representation",
+                                          code="geometry.spline_trim_outside_domain")
+        # A conservative bound, including spline control points, checks the
+        # whole trim. Endpoint-only checks miss curves leaving the saved UV box.
+        box = Bnd_Box2d()
+        BndLib_Add2dCurve.Add_s(pcurve, first, last, 0., box)
+        box.SetGap(0.)
+        xmin, ymin, xmax, ymax = box.Get()
+        for lower, upper, allowed_lower, allowed_upper in (
+                (xmin, xmax, bounds[0], bounds[1]),
+                (ymin, ymax, bounds[2], bounds[3])):
+            roundoff = max(1e-10, 64 * math.ulp(max(1., abs(allowed_lower), abs(allowed_upper))))
+            if (not math.isfinite(lower + upper)
+                    or lower < allowed_lower - roundoff or upper > allowed_upper + roundoff):
+                raise CadQueryConversionError(
+                    f"loop ${loop_index}: complete trim is not inside saved spline UV bounds",
+                    code="geometry.spline_trim_outside_domain")
+
     def _wire(
         self,
         loop: LoopEntity,
         placement: _Placement,
         surface_geometry: _CylinderGeometry | None = None,
     ):
-        edges = tuple(self._edge(coedge, placement) for coedge in self._coedges(loop))
+        coedges = self._coedges(loop)
+        edges = tuple(self._edge(coedge, placement) for coedge in coedges)
         if surface_geometry is not None:
             self._attach_surface_pcurves(
-                edges, surface_geometry, loop_index=loop.index
+                edges, surface_geometry, loop_index=loop.index, coedges=coedges
             )
         try:
             wire = self.cq.Wire.assembleEdges(edges)
@@ -1234,9 +1446,20 @@ class CadQueryConverter:
 
     def _bspline_face(self, face, surface, loops, placement):
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from OCP.Geom import Geom_RectangularTrimmedSurface
         from types import SimpleNamespace
         ocp_surface = self._bspline_geometry(surface, placement)
-        geometry = SimpleNamespace(surface=ocp_surface, radius=1., tolerance=self.tolerance)
+        bounds = tuple(bound if bound is not None else knot
+                       for domain, knots in ((surface.u_range, surface.u_knots),
+                                             (surface.v_range, surface.v_knots))
+                       for bound, knot in zip((domain.lower, domain.upper) if domain else (None, None),
+                                               (knots[0], knots[-1])))
+        bounded = any(r is not None and (r.lower is not None or r.upper is not None)
+                      for r in (surface.u_range, surface.v_range))
+        if bounded:
+            ocp_surface = Geom_RectangularTrimmedSurface(ocp_surface, *bounds)
+        geometry = SimpleNamespace(surface=ocp_surface, radius=1., tolerance=self.tolerance,
+                                   uv_bounds=bounds if bounded else None, source_surface=surface.index)
         wires = tuple(self._wire(loop, placement, geometry) for loop in loops)
         builder = BRepBuilderAPI_MakeFace(ocp_surface, wires[0].wrapped, True)
         for wire in wires[1:]:
@@ -1245,6 +1468,10 @@ class CadQueryConverter:
         if not builder.IsDone():
             raise CadQueryConversionError("B-spline face trim failed")
         result = self.cq.Face(builder.Face())
+        if bounded:
+            self.bounded_surface_faces.append({"face": face.index, "surface": surface.index,
+                "uv_bounds": bounds, "loops": [loop.index for loop in loops],
+                "method": "unchanged spline chart; complete projected trim bounds checked"})
         return self._reverse_face(result) if face.reversed != surface.reversed else result
 
     def _face(self, face: FaceEntity, placement: _Placement):

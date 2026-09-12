@@ -9,6 +9,7 @@ mod asm_nurbs;
 pub mod entities;
 pub mod geometry;
 pub mod nurbs;
+pub mod pcurve;
 pub mod sab;
 pub mod subtypes;
 pub mod tolerant;

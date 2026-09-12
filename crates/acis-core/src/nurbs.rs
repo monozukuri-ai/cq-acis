@@ -154,6 +154,20 @@ impl BSplineSurfaceEntity {
             &self.v_multiplicities,
             self.v_count,
         )?;
+        for (range, knots) in [(self.u_range, &self.u_knots), (self.v_range, &self.v_knots)] {
+            if let Some(range) = range {
+                let lower = range.lower.unwrap_or(knots[0]);
+                let upper = range.upper.unwrap_or(knots[knots.len() - 1]);
+                if !lower.is_finite()
+                    || !upper.is_finite()
+                    || lower < knots[0]
+                    || upper > knots[knots.len() - 1]
+                    || lower >= upper
+                {
+                    return Err("B-spline surface range outside knot domain or empty".into());
+                }
+            }
+        }
         Ok(())
     }
     pub fn evaluate(&self, u: f64, v: f64) -> Result<Vec3, String> {
@@ -413,6 +427,56 @@ mod tests {
         let s = surface();
         for u in [-0.001, 1.001, f64::NAN, f64::INFINITY] {
             assert!(s.evaluate(u, 0.).is_err());
+        }
+    }
+
+    #[test]
+    fn saved_surface_ranges_are_nonempty_subdomains() {
+        for range in [
+            ParameterRange {
+                lower: Some(0.2),
+                upper: Some(0.8),
+            },
+            ParameterRange {
+                lower: None,
+                upper: Some(0.8),
+            },
+            ParameterRange {
+                lower: Some(0.2),
+                upper: None,
+            },
+        ] {
+            let mut s = surface();
+            s.u_range = Some(range);
+            s.v_range = Some(range);
+            s.validate().unwrap();
+            // Evaluation still describes the unchanged supporting surface.
+            assert_eq!(
+                s.evaluate(0.5, 0.5).unwrap(),
+                surface().evaluate(0.5, 0.5).unwrap()
+            );
+        }
+        for (lower, upper) in [
+            (-0.01, 0.8),
+            (0.2, 1.01),
+            (0.5, 0.5),
+            (0.8, 0.2),
+            (f64::NAN, 1.),
+            (0., f64::INFINITY),
+        ] {
+            for u_direction in [false, true] {
+                let mut s = surface();
+                let range = Some(ParameterRange {
+                    lower: Some(lower),
+                    upper: Some(upper),
+                });
+                if u_direction {
+                    s.u_range = range;
+                } else {
+                    s.v_range = range;
+                }
+                assert!(s.validate().is_err());
+            }
         }
     }
 }

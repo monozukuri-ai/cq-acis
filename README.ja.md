@@ -1,5 +1,7 @@
 # cq-acis
 
+開発中の[トレラント境界・有限 UV トリム対応](docs/tolerant-trims.ja.md)には、追加範囲と残る変換制限を記載しています。
+
 ACIS SAT/SABデータを解析し、対応する解析的B-repのサブセットを
 CadQuery/OpenCascade shapeへ変換するパッケージです。
 
