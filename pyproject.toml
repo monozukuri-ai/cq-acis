@@ -25,12 +25,10 @@ python-source = "src"
 module-name = "cq_acis._native"
 features = ["pyo3/extension-module"]
 include = [
-    { path = "docs/tolerant-trims*.md", format = ["sdist", "wheel"] },
-    { path = "docs/sab-support.md", format = ["sdist", "wheel"] },
-    { path = "docs/m4-geometry.md", format = ["sdist", "wheel"] },
+    { path = "docs/*.md", format = ["sdist", "wheel"] },
     { path = "README.ja.md", format = "sdist" },
 ]
-exclude = ["corpus/**", "tests/**", "examples/**"]
+exclude = [".internal/**", "corpus/**", "tests/**", "examples/**"]
 
 [tool.uv]
 cache-keys = [

@@ -1,20 +1,23 @@
 # acis-py-bridge
 
-Shared Rust-to-Python conversion for the `cq_acis.model` dataclasses. The crate
-has no `PyInit` entry point and exports no Python type, so multiple extensions
-can use it without registering duplicate native classes. `acis-core` remains
-independent of Python. This crate uses the matching workspace `acis-core` during
-development and the same exact version from crates.io after publication.
+Convert between Rust `AcisModel` values and Python `cq_acis.model` dataclasses
+in a Python extension. Use matching `acis-core`, `acis-py-bridge`, and Python
+`cq-acis` versions.
 
 `model_from_python` and `model_to_python` validate the model API version (`2`)
 and retain source spans, unknown bytes, arbitrary precision integers, and
-diagnostics without a SAT or JSON intermediate. Install the matching Python
+diagnostics. Install the matching Python
 `cq-acis` release at runtime; `cq_acis.model.MODEL_API_VERSION` remains `2`.
 
-Publish `acis-core` first, then this bridge, before downstream registry-only builds.
-Run `cargo publish --dry-run -p acis-py-bridge --locked` to verify the package;
-this command does not publish it. Development overrides belong in an explicit
-Cargo `--config` file, not in a downstream release manifest.
+The model API version describes dataclass layouts and is separate from the
+release number.
 
-From 0.3.2, Rust and Python packages share the workspace version. The model API
-version describes dataclass layouts and is separate from the release number.
+For the 0.3.3 model bridge:
+
+```toml
+[dependencies]
+acis-py-bridge = "=0.3.3"
+```
+
+See the [shared model API](https://github.com/monozukuri-ai/cq-acis/blob/main/docs/model-api.md)
+for reference, metadata, and raw-data contracts.

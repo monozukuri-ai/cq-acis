@@ -44,32 +44,6 @@ The ezdxf test sources provide these fixtures:
 ezdxf is distributed under the MIT License. The notice is preserved in
 [`licenses/ezdxf-LICENSE`](licenses/ezdxf-LICENSE).
 
-## Additional data candidates (P1)
-
-The current P0 corpus contains 1,896 `ellipse-curve` entities, all with ratio
-1.0, and 908 `cone-surface` entities, all with ratio 1.0 and
-`sin_half_angle=0`. It is therefore sufficient for circular-edge and
-cylindrical-surface coverage, but lacks real-data coverage for non-circular
-ellipses and cones. Until suitable real files are added, generated fixtures
-are used to test analytic curve and surface construction.
-
-- The UMD CIM educational [cube with the cylindrical hole SAT example](https://isr.umd.edu/Labs/CIM/vm/xlator/acis.html)
-  is a small, readable SAT 105 cylindrical-hole model. Its public page does
-  not state redistribution terms, so the example is recorded as a URL only
-  and is not vendored here.
-- The `acadrust` [`SatDocument` builder](https://docs.rs/acadrust/latest/acadrust/entities/acis/types/struct.SatDocument.html)
-  provides `add_ellipse_curve` and `add_cone_surface` under the MPL-2.0
-  project license. It can generate minimal reproducible fixtures, but is not
-  a replacement for real CAD exports.
-- Public ACIS 7.0 format excerpts and ellipse/cone record examples are
-  available in [Paul Bourke's SAT notes](https://paulbourke.net/dataformats/sat/sat.pdf).
-  These notes are used for format research only; their redistribution terms
-  should be checked before copying data into this repository.
-
-When vendoring a P1 artifact, add its URL, retrieval date, SHA-256, license,
-and the entity distribution proving that it contains a real ellipse or cone
-to `sources.lock.json` and `manifest.jsonl`.
-
 ## Operating rules
 
 - Fetch pinned commits from `sources.lock.json`, never an upstream branch tip.
