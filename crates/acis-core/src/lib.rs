@@ -12,6 +12,7 @@ pub mod nurbs;
 pub mod pcurve;
 pub mod sab;
 pub mod subtypes;
+pub mod supported_curve;
 pub mod tolerant;
 pub use entities::*;
 pub use geometry::{GeometryError, Vec3};

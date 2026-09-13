@@ -197,6 +197,23 @@ impl NativeModel {
             acis_py_bridge::spline_surface_pcurve_to_python,
         )
     }
+    fn supported_curve<'py>(&self, reference: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let py = reference.py();
+        let Some(entity) = self
+            .inner
+            .resolve(reference_from_python(reference)?)
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        let resolver = self
+            .subtypes
+            .get_or_init(|| acis_core::subtypes::SubtypeResolver::new(Arc::clone(&self.inner)));
+        let view = resolver
+            .supported_curve(entity.index())
+            .map_err(model_error)?;
+        optional_to_py(py, view.as_ref(), acis_py_bridge::supported_curve_to_python)
+    }
     fn __repr__(&self) -> String {
         format!(
             "NativeModel(entities={}, bodies={})",

@@ -15,7 +15,7 @@ use entities::*;
 pub use entities::{read_entity as entity_from_python, write_entity as entity_to_python};
 pub use extensions::{
     linear_surface_pcurve_to_python, resolved_subtype_to_python, spline_surface_pcurve_to_python,
-    subtype_table_to_python, tolerant_to_python,
+    subtype_table_to_python, supported_curve_to_python, tolerant_to_python,
 };
 
 /// Version of the Python dataclass layout, independent of crate/package versions.

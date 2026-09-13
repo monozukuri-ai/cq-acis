@@ -4,8 +4,9 @@ Saved tolerant scalars have incomplete semantics. Conversion uses the observed
 TEDGE bound only with a qualified same-support saved UV curve; other extension
 scalars remain uninterpreted. Subtype extents index RawEntity.values, not bytes.
 """
+from __future__ import annotations
 from dataclasses import dataclass
-from .model import CoedgeEntity, EdgeEntity, VertexEntity, ModelEntity, RawEntity
+from .model import CoedgeEntity, EdgeEntity, VertexEntity, ModelEntity, RawEntity, BSplineCurveEntity, ParameterRange
 from .tokens import EntityRef
 
 
@@ -28,6 +29,7 @@ class TolerantCoedge:
     coedge: CoedgeEntity
     parameter_interval: tuple[float, float]
     attachment: EntityRef
+    inline_curve: SupportedCurve | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,3 +84,26 @@ class SplineSurfacePcurve:
     fit_tolerance: float
     support_reversed: bool
     support: SubtypeDefinition
+
+
+@dataclass(frozen=True, slots=True)
+class UvSpline:
+    degree: int
+    knots: tuple[float, ...]
+    multiplicities: tuple[int, ...]
+    poles: tuple[tuple[float, float], ...]
+    weights: tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SupportedCurve:
+    curve: BSplineCurveEntity
+    kind: str
+    support: ModelEntity
+    secondary_support: ModelEntity | None
+    support_definition: SubtypeDefinition | None
+    pcurve: UvSpline
+    value_start: int
+    value_end: int
+    support_range: ParameterRange | None
+    saved_lists: tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]

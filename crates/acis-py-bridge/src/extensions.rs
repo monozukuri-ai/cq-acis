@@ -40,6 +40,7 @@ pub fn tolerant_to_python<'py>(
                 entity_to_python(py, &Entity::Coedge(v.coedge.clone()))?,
                 PyTuple::new(py, v.parameter_interval)?.into_any(),
                 reference_to_py(py, v.attachment)?,
+                optional_to_py(py, v.inline_curve.as_deref(), supported_curve_to_python)?,
             ],
         ),
     };
@@ -148,6 +149,47 @@ pub fn resolved_subtype_to_python<'py>(
         vec![
             entity_to_python(py, &resolved.geometry)?,
             definition_to_python(py, &resolved.definition)?,
+        ],
+    )
+}
+
+pub fn supported_curve_to_python<'py>(
+    py: Python<'py>,
+    view: &acis_core::supported_curve::SupportedCurve,
+) -> PyResult<Bound<'py, PyAny>> {
+    let pc = &view.pcurve;
+    let uv = extension(
+        py,
+        "UvSpline",
+        vec![
+            pc.degree.into_bound_py_any(py)?,
+            PyTuple::new(py, &pc.knots)?.into_any(),
+            PyTuple::new(py, &pc.multiplicities)?.into_any(),
+            PyTuple::new(py, pc.poles.iter().map(|p| (p[0], p[1])))?.into_any(),
+            PyTuple::new(py, &pc.weights)?.into_any(),
+        ],
+    )?;
+    extension(
+        py,
+        "SupportedCurve",
+        vec![
+            entity_to_python(py, &Entity::BSplineCurve(view.curve.clone()))?,
+            view.kind.clone().into_bound_py_any(py)?,
+            entity_to_python(py, &view.support)?,
+            optional_to_py(py, view.secondary_support.as_ref(), entity_to_python)?,
+            optional_to_py(py, view.support_definition.as_ref(), definition_to_python)?,
+            uv,
+            view.value_start.into_bound_py_any(py)?,
+            view.value_end.into_bound_py_any(py)?,
+            optional_to_py(py, view.support_range.as_ref(), range_to_py)?,
+            PyTuple::new(
+                py,
+                view.saved_lists
+                    .iter()
+                    .map(|v| PyTuple::new(py, v))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
         ],
     )
 }

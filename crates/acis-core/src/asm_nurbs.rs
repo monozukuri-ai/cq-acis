@@ -8,12 +8,12 @@ use crate::{
     AcisValue, BSplineCurveEntity, BSplineSurfaceEntity, Entity, ParameterRange, RawEntity, Vec3,
 };
 
-struct Reader<'a> {
-    values: &'a [AcisValue],
-    pos: usize,
+pub(crate) struct Reader<'a> {
+    pub(crate) values: &'a [AcisValue],
+    pub(crate) pos: usize,
 }
 impl Reader<'_> {
-    fn take(&mut self) -> Result<&AcisValue, String> {
+    pub(crate) fn take(&mut self) -> Result<&AcisValue, String> {
         let v = self
             .values
             .get(self.pos)
@@ -21,21 +21,21 @@ impl Reader<'_> {
         self.pos += 1;
         Ok(v)
     }
-    fn byte(&mut self, expected: u8) -> Result<(), String> {
+    pub(crate) fn byte(&mut self, expected: u8) -> Result<(), String> {
         if matches!(self.take()?, AcisValue::Bytes(v) if v == &[expected]) {
             Ok(())
         } else {
             Err(format!("explicit ASM spline expected tag {expected}"))
         }
     }
-    fn word(&mut self, expected: &str) -> Result<(), String> {
+    pub(crate) fn word(&mut self, expected: &str) -> Result<(), String> {
         if matches!(self.take()?, AcisValue::String(v) if v == expected) {
             Ok(())
         } else {
             Err(format!("explicit ASM spline expected {expected}"))
         }
     }
-    fn integer(&mut self) -> Result<usize, String> {
+    pub(crate) fn integer(&mut self) -> Result<usize, String> {
         match self.take()? {
             AcisValue::Integer(v) => v
                 .to_string()
@@ -44,14 +44,14 @@ impl Reader<'_> {
             _ => Err("expected ASM spline integer".into()),
         }
     }
-    fn int(&mut self, expected: usize) -> Result<(), String> {
+    pub(crate) fn int(&mut self, expected: usize) -> Result<(), String> {
         if self.integer()? == expected {
             Ok(())
         } else {
             Err("unqualified ASM spline field".into())
         }
     }
-    fn number(&mut self) -> Result<f64, String> {
+    pub(crate) fn number(&mut self) -> Result<f64, String> {
         let v = match self.take()? {
             AcisValue::Float(v) => *v,
             AcisValue::Integer(v) => v
@@ -66,27 +66,27 @@ impl Reader<'_> {
             Err("nonfinite ASM spline number".into())
         }
     }
-    fn scalar(&mut self, expected: f64) -> Result<(), String> {
+    pub(crate) fn scalar(&mut self, expected: f64) -> Result<(), String> {
         if self.number()? == expected {
             Ok(())
         } else {
             Err("unqualified ASM spline scalar".into())
         }
     }
-    fn bound(&mut self) -> Result<Option<f64>, String> {
+    pub(crate) fn bound(&mut self) -> Result<Option<f64>, String> {
         match self.take()? {
             AcisValue::Bytes(v) if v == &[0x0b] => Ok(None),
             AcisValue::Bytes(v) if v == &[0x0a] => Ok(Some(self.number()?)),
             _ => Err("invalid ASM spline bound".into()),
         }
     }
-    fn range(&mut self) -> Result<Option<ParameterRange>, String> {
+    pub(crate) fn range(&mut self) -> Result<Option<ParameterRange>, String> {
         Ok(Some(ParameterRange {
             lower: self.bound()?,
             upper: self.bound()?,
         }))
     }
-    fn knots(
+    pub(crate) fn knots(
         &mut self,
         degree: usize,
         count: usize,
@@ -113,7 +113,11 @@ impl Reader<'_> {
         knot_vector(degree, &knots, &mult, poles)?;
         Ok((knots, mult, poles))
     }
-    fn poles(&mut self, count: usize, rational: bool) -> Result<(Vec<Vec3>, Vec<f64>), String> {
+    pub(crate) fn poles(
+        &mut self,
+        count: usize,
+        rational: bool,
+    ) -> Result<(Vec<Vec3>, Vec<f64>), String> {
         if count > 1_000_000 {
             return Err("ASM spline pole limit".into());
         }

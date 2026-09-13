@@ -74,4 +74,6 @@ Python の値を返しますが、元の Python オブジェクトの同一性�
 ビューや subtype の索引だけで完全な形状対応を保証するものではありません。
 [形状の対応範囲](geometry-support.md)と[トレラントトリム](tolerant-trims.ja.md)を参照してください。
 
-未公開の追加 API: `NativeModel.spline_surface_pcurve(pcurve_ref, surface_ref)` は、[トレラントトリム](tolerant-trims.ja.md)に記載した限定的な `SplineSurfacePcurve` ビューを返します。
+0.3.4 で追加: `NativeModel.spline_surface_pcurve(pcurve_ref, surface_ref)` は、[トレラントトリム](tolerant-trims.ja.md)に記載した限定的な `SplineSurfacePcurve` ビューを返します。
+
+未公開: `TolerantCoedge.inline_curve` と `NativeModel.supported_curve()` は支持曲線と元の支持／UV の出典を保持します。[トレラントトリム](tolerant-trims.ja.md)を参照してください。

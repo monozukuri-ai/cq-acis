@@ -47,11 +47,13 @@ compatibility or correspondence with a vendor application's current model state.
 The converter preserves source 3D boundary curves. Projected 2D trims may be
 numerical approximations, but their curve-on-surface deviation must stay within
 the original model's `resabs`. Qualified saved UV splines may use the observed
-[source edge bound](tolerant-trims.md#local-edge-bound) in the unreleased
+[source edge bound](tolerant-trims.md#local-edge-bound) introduced in the 0.3.4
 implementation, with explicit per-edge diagnostics and unchanged geometry.
 Failed projection, disconnected trims, invalid faces and open shells remain
-errors. Model resolution, finite UV bounds and strict endpoint checks remain
-unchanged; fit tolerances never supply additional allowance.
+errors. Model resolution and finite UV bounds remain fixed. The unreleased
+[associated-curve support](tolerant-trims.md#unreleased-inline-and-associated-curves)
+adds independently checked local endpoint/fit rules; fit tolerances never
+increase a shared TEDGE allowance.
 
 Cone, sphere, and torus `evaluate()` methods use canonical coordinates; saved
 ACIS UV ranges are not interchangeable with those coordinates. NURBS evaluation

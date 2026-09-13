@@ -26,6 +26,7 @@ pub struct TolerantCoedge {
     pub parameter_interval: [f64; 2],
     /// Uninterpreted attachment; only the null attachment profile is admitted.
     pub attachment: EntityRef,
+    pub inline_curve: Option<Box<crate::supported_curve::SupportedCurve>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,10 +172,28 @@ pub fn decode(raw: &RawEntity, save_version: u32) -> Result<Option<TolerantTopol
             if attachment.0 != -1 {
                 return Err("unqualified tolerant coedge attachment".into());
             }
-            r.zero()?;
-            if r.text()? != "null_curve" {
-                return Err("inline tolerant coedge curve is not decoded".into());
-            }
+            let inline_curve = match r.int()? {
+                0 => {
+                    if r.text()? != "null_curve" {
+                        return Err("unqualified null coedge curve".into());
+                    }
+                    None
+                }
+                1 => {
+                    if r.text()? != "intcurve" {
+                        return Err("unqualified inline coedge curve".into());
+                    }
+                    let view = crate::supported_curve::decode(raw, r.pos, None)?;
+                    if view.curve.knots.first() != Some(&parameter_interval[0])
+                        || view.curve.knots.last() != Some(&parameter_interval[1])
+                    {
+                        return Err("inline curve and coedge intervals differ".into());
+                    }
+                    r.pos = view.value_end;
+                    Some(Box::new(view))
+                }
+                _ => return Err("unqualified topology extension".into()),
+            };
             r.zero()?;
             TolerantTopology::Coedge(TolerantCoedge {
                 coedge: CoedgeEntity {
@@ -190,6 +209,7 @@ pub fn decode(raw: &RawEntity, save_version: u32) -> Result<Option<TolerantTopol
                 },
                 parameter_interval,
                 attachment,
+                inline_curve,
             })
         }
         _ => return Ok(None),

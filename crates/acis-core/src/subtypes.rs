@@ -244,6 +244,12 @@ impl SubtypeResolver {
     ) -> Result<Option<crate::pcurve::SplineSurfacePcurve>, String> {
         crate::pcurve::decode_spline(&self.model, &self.table, pcurve, surface)
     }
+    pub fn supported_curve(
+        &self,
+        index: usize,
+    ) -> Result<Option<crate::supported_curve::SupportedCurve>, String> {
+        crate::supported_curve::decode_with_model(&self.model, &self.table, index)
+    }
 }
 
 /// Resolve a top-level geometry alias through the indexed definition. Nested

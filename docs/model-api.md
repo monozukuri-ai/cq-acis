@@ -78,4 +78,6 @@ The source entities remain raw. A view or subtype index does not establish
 complete geometry support; see [geometry support](geometry-support.md) and
 [tolerant trims](tolerant-trims.md).
 
-Unreleased additive API: `NativeModel.spline_surface_pcurve(pcurve_ref, surface_ref)` returns the bounded `SplineSurfacePcurve` view described in [tolerant trims](tolerant-trims.md).
+Since 0.3.4: `NativeModel.spline_surface_pcurve(pcurve_ref, surface_ref)` returns the bounded `SplineSurfacePcurve` view described in [tolerant trims](tolerant-trims.md).
+
+Unreleased: `TolerantCoedge.inline_curve` and `NativeModel.supported_curve()` retain full associated curves and their source support/UV provenance. See [tolerant trims](tolerant-trims.md).
