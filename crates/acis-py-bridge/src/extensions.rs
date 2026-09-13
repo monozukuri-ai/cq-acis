@@ -81,6 +81,28 @@ pub fn linear_surface_pcurve_to_python<'py>(
     )
 }
 
+pub fn spline_surface_pcurve_to_python<'py>(
+    py: Python<'py>,
+    view: &acis_core::pcurve::SplineSurfacePcurve,
+) -> PyResult<Bound<'py, PyAny>> {
+    extension(
+        py,
+        "SplineSurfacePcurve",
+        vec![
+            entity_to_python(py, &Entity::Raw(view.raw.clone()))?,
+            view.degree.into_bound_py_any(py)?,
+            PyTuple::new(py, &view.knots)?.into_any(),
+            PyTuple::new(py, &view.multiplicities)?.into_any(),
+            PyTuple::new(py, view.poles.iter().map(|p| (p[0], p[1])))?.into_any(),
+            view.reversed.into_bound_py_any(py)?,
+            PyTuple::new(py, view.parameter_interval)?.into_any(),
+            view.fit_tolerance.into_bound_py_any(py)?,
+            view.support_reversed.into_bound_py_any(py)?,
+            definition_to_python(py, &view.support)?,
+        ],
+    )
+}
+
 pub fn subtype_table_to_python<'py>(
     py: Python<'py>,
     table: &SubtypeTable,

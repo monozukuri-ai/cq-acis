@@ -73,3 +73,5 @@ Python の値を返しますが、元の Python オブジェクトの同一性�
 対応する raw 形状の追加ビューを取得できます。元のエンティティは raw のまま残ります。
 ビューや subtype の索引だけで完全な形状対応を保証するものではありません。
 [形状の対応範囲](geometry-support.md)と[トレラントトリム](tolerant-trims.ja.md)を参照してください。
+
+未公開の追加 API: `NativeModel.spline_surface_pcurve(pcurve_ref, surface_ref)` は、[トレラントトリム](tolerant-trims.ja.md)に記載した限定的な `SplineSurfacePcurve` ビューを返します。

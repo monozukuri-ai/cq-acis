@@ -25,6 +25,23 @@ def pcurve_values(start=(.2, .2), end=(.8, .2)):
             b"\x0b", b"\x0b", b"\x0b", b"\x0b", b"\x10", 0., 0.)
 
 
+def cubic_pcurve_values(start=(.2, .2), end=(.8, .2), reverse=False, support_reverse=False):
+    # Two independent cubic Bezier segments with an asymmetric knot, both
+    # representing UV(t) = start + t*(end-start). Endpoint-only tests cannot
+    # establish correct internal knot remapping when the direction is reversed.
+    fractions = (0., .1, .2, .3, .3+.7/3, .3+1.4/3, 1.)
+    poles = tuple(tuple(a + t*(b-a) for a, b in zip(start, end)) for t in fractions)
+    knots = (0., .3, 1.)
+    if reverse:
+        poles = poles[::-1]
+        knots = tuple(-k for k in knots[::-1])
+    return (N, 0, b"\x0a" if reverse else b"\x0b", b"\x0f", "exp_par_cur", "nubs", 3, 0, 3,
+            *(value for k in knots for value in (k, 3)),
+            *(value for p in poles for value in p), 0., "spline",
+            b"\x0a" if support_reverse else b"\x0b", b"\x0f", "ref", 0, b"\x10",
+            b"\x0b", b"\x0b", b"\x0b", b"\x0b", b"\x10", 0., 0.)
+
+
 def boundary(spline=False, edge_reversed=False, coedge_reversed=False):
     if spline:
         curve = a.BSplineCurveEntity(raw(0, "intcurve-curve"), N, 2, (0., 1.), (3, 3),
@@ -235,6 +252,8 @@ class SavedPcurveTests(unittest.TestCase):
         wrong = model([*source.entities[:2], raw(2, "spline-surface", surface_values()), alias])
         with self.assertRaisesRegex(a.AcisModelError, "different spline"):
             wrong.to_native().linear_surface_pcurve(1, 3)
+        with self.assertRaisesRegex(a.AcisModelError, "different spline"):
+            wrong.to_native().spline_surface_pcurve(1, 3)
         self.assertIsNone(model(source.entities, 22600).to_native().linear_surface_pcurve(1, 2))
 
     def test_incomplete_extended_and_nonfinite_charts_never_return_a_view(self):
@@ -284,6 +303,196 @@ class SavedPcurveTests(unittest.TestCase):
         changed = replace(source, entities=(*source.entities[:-1], replace(source.entities[-1], values=tuple(bad))))
         with self.assertRaises(a.CadQueryConversionError):
             a.CadQueryConverter(changed)._face(changed.entities[0], _Placement(None, 1.))
+
+
+class SplinePcurveTests(unittest.TestCase):
+    def source(self, reverse=False, support_reverse=False):
+        source = SavedPcurveTests().face_with_saved_pcurves()
+        entries = list(source.entities)
+        for pc in source.entities:
+            if isinstance(pc, a.RawEntity) and pc.type_name == "pcurve":
+                entries[pc.index] = replace(pc, values=cubic_pcurve_values(
+                    pc.values[13:15], pc.values[15:17], reverse, support_reverse))
+        return replace(source, entities=tuple(entries))
+
+    def test_cubic_knots_and_independent_senses_keep_uv_and_face_area(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        for reverse in (False, True):
+            for support_reverse in (False, True):
+                with self.subTest(reverse=reverse, support=support_reverse):
+                    source = self.source(reverse, support_reverse)
+                    converter = a.CadQueryConverter(source)
+                    coedge = source.entities[3]
+                    view = source.to_native().spline_surface_pcurve(coedge.pcurve, 1)
+                    self.assertEqual(view.raw, source.resolve(coedge.pcurve))
+                    self.assertEqual(view.parameter_interval, (0., 1.))
+                    self.assertEqual(view.multiplicities, (4, 3, 4))
+                    self.assertEqual(view.reversed, reverse)
+                    self.assertEqual(view.support_reversed, support_reverse)
+                    self.assertIsNone(source.to_native().linear_surface_pcurve(coedge.pcurve, 1))
+                    for reverse_3d in (False, True):
+                        pc, _ = converter._saved_surface_pcurve(
+                            coedge, SimpleNamespace(source_surface=1), 2., 7., reverse_3d)
+                        for fraction in (0., .1, .3, .5, .7, .9, 1.):
+                            uv = pc.Value(2+5*fraction)
+                            self.assertAlmostEqual(uv.X(), .2+.6*(1-fraction if reverse_3d else fraction), places=12)
+                            self.assertAlmostEqual(uv.Y(), .2, places=12)
+                    with patch("OCP.GeomProjLib.GeomProjLib.Curve2d_s", side_effect=AssertionError("projection")):
+                        shape = converter._face(source.entities[0], _Placement(None, 1.))
+                    self.assertTrue(shape.isValid())
+                    self.assertAlmostEqual(shape.Area(), 2.16, places=9)
+                    self.assertEqual(len(converter.saved_pcurves), 4)
+
+    def test_unqualified_and_truncated_splines_never_return_a_view(self):
+        source = self.source(True, True)
+        original = source.entities[-1]
+        values = original.values
+        variants = [values[:n] for n in range(len(values))] + [(*values, 0)]
+        for pos, value in [(2, b"\x09"), (5, "nurbs"), (6, 2), (7, 1), (8, 10**100),
+                           (9, math.nan), (10, 2), (11, 0.), (12, 4), (15, math.inf),
+                           (29, -1.), (31, b"\x09"), (34, 99), (42, .1)]:
+            changed = list(values)
+            changed[pos] = value
+            variants.append(tuple(changed))
+        for changed in variants:
+            with self.subTest(values=changed):
+                native = replace(source, entities=(*source.entities[:-1], replace(original, values=changed))).to_native()
+                try:
+                    view = native.spline_surface_pcurve(original.index, 1)
+                except a.AcisModelError:
+                    continue
+                self.assertIsNone(view)
+        self.assertIsNone(replace(source, metadata=replace(source.metadata, save_version=22600))
+                          .to_native().spline_surface_pcurve(original.index, 1))
+
+    def test_cubic_interior_excursion_rejects_despite_valid_endpoints(self):
+        from types import SimpleNamespace
+        source = self.source()
+        pc = source.entities[-1]
+        values = list(pc.values)
+        values[17] = 4.  # Interior U control point, endpoints remain in bounds.
+        source = replace(source, entities=(*source.entities[:-1], replace(pc, values=tuple(values))))
+        converter = a.CadQueryConverter(source)
+        coedge = next(e for e in source.entities if isinstance(e, a.CoedgeEntity) and e.pcurve.index == pc.index)
+        curve, _ = converter._saved_surface_pcurve(coedge, SimpleNamespace(source_surface=1), 0., 1., False)
+        self.assertGreater(curve.Value(.1).X(), .9)
+        with self.assertRaises(a.CadQueryConversionError) as caught:
+            converter._check_uv_trim(curve, 0., 1., (.1, .9, .1, .9), 2)
+        self.assertEqual(caught.exception.code, "geometry.spline_trim_outside_domain")
+
+    def test_inconsistent_curve_sense_cannot_reuse_the_saved_interval(self):
+        source = self.source()
+        values = list(source.entities[23].values)
+        values[2] = b"\x0a"
+        source = replace(source, entities=tuple(replace(e, values=tuple(values)) if e.index == 23 else e
+                                                for e in source.entities))
+        with self.assertRaises(a.CadQueryConversionError) as caught:
+            a.CadQueryConverter(source)._face(source.entities[0], _Placement(None, 1.))
+        self.assertEqual(caught.exception.code, "geometry.saved_pcurve_parameter_mismatch")
+
+
+class SavedEdgeToleranceTests(unittest.TestCase):
+    def source(self, gap=.001, allowance=.001, units=1.):
+        source = SavedPcurveTests().face_with_saved_pcurves()
+        entries = list(source.entities)
+        for entity in source.entities:
+            if isinstance(entity, a.BSplineCurveEntity):
+                entries[entity.index] = replace(entity, poles=tuple(p+a.Vec3(0, 0, gap) for p in entity.poles))
+            elif isinstance(entity, a.PointEntity):
+                entries[entity.index] = replace(entity, location=entity.location+a.Vec3(0, 0, gap))
+            elif isinstance(entity, a.EdgeEntity):
+                entries[entity.index] = raw(entity.index, "tedge-edge", (N, entity.start_vertex, 0.,
+                    entity.end_vertex, 1., entity.coedge, entity.curve, b"\x0b", "tangent", allowance, 22601, 0))
+            elif isinstance(entity, a.CoedgeEntity):
+                entries[entity.index] = raw(entity.index, "tcoedge-coedge", (N, entity.next_coedge,
+                    entity.previous_coedge, entity.partner_coedge, entity.edge, b"\x0b", entity.loop,
+                    0, entity.pcurve, 0., 1., N, 0, "null_curve", 0))
+        return replace(source, entities=tuple(entries), metadata=replace(source.metadata, units_mm=units))
+
+    def test_local_bound_scales_but_source_curves_vertices_and_model_resolution_stay_fixed(self):
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.BRep import BRep_Tool
+        for units in (1., 10.):
+            source = self.source(units=units)
+            original = source.to_native().to_model()
+            converter = a.CadQueryConverter(source)
+            shape = converter._face(source.entities[0], _Placement(None, units))
+            self.assertTrue(shape.isValid())
+            self.assertEqual(source, original)
+            self.assertEqual(converter.tolerance, 1e-6*units)
+            self.assertEqual(len(converter.source_edge_tolerances), 4)
+            self.assertAlmostEqual(shape.Area(), 2.16*units**2, places=7)
+            for row in converter.source_edge_tolerances:
+                self.assertAlmostEqual(row['limit_mm'], .001001*units, places=12)
+                self.assertAlmostEqual(row['max_deviation_mm'], .001*units, places=12)
+            for edge in shape.Edges():
+                curve = BRepAdaptor_Curve(edge.wrapped)
+                for t in (0., .25, .5, .75, 1.):
+                    self.assertAlmostEqual(curve.Value(t).Z(), .001*units, places=12)
+                self.assertAlmostEqual(BRep_Tool.Tolerance_s(edge.wrapped), .001001*units, places=12)
+            for vertex in shape.Vertices():
+                self.assertAlmostEqual(vertex.Center().z, .001*units, places=12)
+
+    def test_underreported_edge_bound_or_ordinary_topology_remains_rejected(self):
+        ordinary = SavedPcurveTests().face_with_saved_pcurves()
+        for variant in ('underreported', 'ordinary_coedge', 'ordinary_edge', 'projected', 'huge_fit'):
+            source = self.source(allowance=.0001 if variant in ('underreported', 'huge_fit') else .001)
+            entries = list(source.entities)
+            if variant in ('ordinary_coedge', 'ordinary_edge'):
+                index = 3 if variant == 'ordinary_coedge' else 4
+                entries[index] = ordinary.entities[index]
+            elif variant == 'projected':
+                values = list(entries[3].values)
+                values[8] = N
+                entries[3] = replace(entries[3], values=tuple(values))
+            elif variant == 'huge_fit':
+                values = list(entries[23].values)
+                values[17] = 100.
+                entries[23] = replace(entries[23], values=tuple(values))
+            source = replace(source, entities=tuple(entries))
+            with self.subTest(variant=variant), self.assertRaises(a.CadQueryConversionError) as caught:
+                a.CadQueryConverter(source)._face(source.entities[0], _Placement(None, 1.))
+            self.assertEqual(caught.exception.code, 'geometry.pcurve_projection' if variant == 'projected'
+                             else 'geometry.pcurve_mismatch')
+
+    def test_large_edge_bound_cannot_expand_finite_uv_domain(self):
+        source = self.source(allowance=100.)
+        values = list(source.entities[23].values)
+        values[13] = 1.1
+        source = replace(source, entities=tuple(replace(e, values=tuple(values)) if e.index == 23 else e
+                                                for e in source.entities))
+        with self.assertRaises(a.CadQueryConversionError) as caught:
+            a.CadQueryConverter(source)._face(source.entities[0], _Placement(None, 1.))
+        self.assertEqual(caught.exception.code, 'geometry.spline_trim_outside_domain')
+
+    def test_similarity_transform_scales_bound_and_shear_rejects_local_allowance(self):
+        transform = a.TransformEntity(raw(27, 'transform'),
+            (0., 1., 0., -1., 0., 0., 0., 0., 1., 10., 20., 30.), 3., True, False, False)
+        source = self.source(units=10.)
+        converter = a.CadQueryConverter(source)
+        shape = converter._face(source.entities[0], _Placement(transform, 10.))
+        self.assertTrue(shape.isValid())
+        self.assertAlmostEqual(shape.Area(), 2.16*30**2, places=6)
+        for row in converter.source_edge_tolerances:
+            self.assertAlmostEqual(row['scale_to_mm'], 30.)
+            self.assertAlmostEqual(row['saved_deviation_mm'], .03)
+            self.assertAlmostEqual(row['limit_mm'], .03001)
+        shear = replace(transform, matrix_values=(1., 0., 0., .1, 1., 0., 0., 0., 1., 0., 0., 0.), sheared=True)
+        with self.assertRaises(a.CadQueryConversionError) as caught:
+            a.CadQueryConverter(source)._face(source.entities[0], _Placement(shear, 10.))
+        self.assertEqual(caught.exception.code, 'geometry.tolerant_transform_unsupported')
+
+    def test_only_one_original_resolution_is_added_to_the_saved_bound(self):
+        for gap, accepted in ((.0010005, True), (.001002, False)):
+            source = self.source(gap=gap)
+            converter = a.CadQueryConverter(source)
+            if accepted:
+                self.assertTrue(converter._face(source.entities[0], _Placement(None, 1.)).isValid())
+            else:
+                with self.assertRaises(a.CadQueryConversionError) as caught:
+                    converter._face(source.entities[0], _Placement(None, 1.))
+                self.assertEqual(caught.exception.code, 'geometry.pcurve_mismatch')
 
 
 if __name__ == "__main__":

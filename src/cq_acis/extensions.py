@@ -1,7 +1,8 @@
 """Additive Rust-decoded views; raw entities and model API 2 stay unchanged.
 
-Saved tolerant scalars have incomplete semantics. They are not effective OCCT
-tolerances. Subtype extents are indices into RawEntity.values, not byte offsets.
+Saved tolerant scalars have incomplete semantics. Conversion uses the observed
+TEDGE bound only with a qualified same-support saved UV curve; other extension
+scalars remain uninterpreted. Subtype extents index RawEntity.values, not bytes.
 """
 from dataclasses import dataclass
 from .model import CoedgeEntity, EdgeEntity, VertexEntity, ModelEntity, RawEntity
@@ -65,4 +66,19 @@ class LinearSurfacePcurve:
     parameter_interval: tuple[float, float]
     uv_endpoints: tuple[tuple[float, float], tuple[float, float]]
     fit_tolerance: float
+    support: SubtypeDefinition
+
+
+@dataclass(frozen=True, slots=True)
+class SplineSurfacePcurve:
+    """Saved UV poles/knots; reversed means C(-t), support sense keeps UV."""
+    raw: RawEntity
+    degree: int
+    knots: tuple[float, ...]
+    multiplicities: tuple[int, ...]
+    poles: tuple[tuple[float, float], ...]
+    reversed: bool
+    parameter_interval: tuple[float, float]
+    fit_tolerance: float
+    support_reversed: bool
     support: SubtypeDefinition

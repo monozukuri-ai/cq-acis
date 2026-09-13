@@ -3,14 +3,14 @@ members = ["crates/acis-core", "crates/cq-acis-py", "crates/acis-py-bridge"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 rust-version = "1.83"
 license = "MIT"
 repository = "https://github.com/monozukuri-ai/cq-acis"
 
 [workspace.dependencies]
-acis-core = { path = "crates/acis-core", version = "=0.3.3" }
-acis-py-bridge = { path = "crates/acis-py-bridge", version = "=0.3.3" }
+acis-core = { path = "crates/acis-core", version = "=0.3.4" }
+acis-py-bridge = { path = "crates/acis-py-bridge", version = "=0.3.4" }
 num-bigint = "0.4.7"
 pyo3 = { version = "0.29.2", features = ["abi3-py310", "num-bigint"] }
