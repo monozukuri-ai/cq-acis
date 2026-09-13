@@ -282,6 +282,71 @@ def inline_pcurve(converter, view, curve, geometry, first, last, reverse):
     return pc
 
 
+def reparameterize_saved_pcurve(pcurve, curve, surface, first, last, limit):
+    """Change only the knot clock of exact, subdivided saved UV spans.
+
+    Knot insertion preserves the saved rational Bezier arcs. Assigning each
+    arc a new, strictly increasing interval preserves their locus and order.
+    Closest-point projection chooses that clock; full curve-on-surface checks on
+    every resulting span, rather than projection samples, admit the result.
+    """
+    from OCP.Geom import Geom_Circle, Geom_Ellipse, Geom_BSplineCurve
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnCurve
+    from OCP.Geom2d import Geom2d_BSplineCurve
+    from OCP.TColgp import TColgp_Array1OfPnt2d
+    from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+
+    if not (isinstance(curve, (Geom_Circle, Geom_Ellipse, Geom_BSplineCurve))
+            and isinstance(pcurve, Geom2d_BSplineCurve)
+            and not pcurve.IsPeriodic()
+            and last > first
+            and (isinstance(curve, Geom_BSplineCurve) or last - first < math.pi)
+            and pcurve.FirstParameter() == first and pcurve.LastParameter() == last):
+        return pcurve, None
+    source_knots = [pcurve.Knot(i) for i in range(1, pcurve.NbKnots() + 1)]
+    degree = pcurve.Degree()
+    for subdivisions in (2, 4, 8, 16, 32, 64):
+        if (len(source_knots) - 1) * subdivisions > 512:
+            break
+        split = pcurve.Copy()
+        for i in range(2, split.NbKnots()):
+            missing = degree - split.Multiplicity(i)
+            if missing:
+                split.InsertKnot(split.Knot(i), missing)
+        for a, b in zip(source_knots, source_knots[1:]):
+            for j in range(1, subdivisions):
+                split.InsertKnot(a + (b - a) * j / subdivisions, degree)
+        old = [split.Knot(i) for i in range(1, split.NbKnots() + 1)]
+        mapped = [first]
+        for parameter in old[1:-1]:
+            uv = split.Value(parameter)
+            p = surface.Value(uv.X(), uv.Y())
+            projection = GeomAPI_ProjectPointOnCurve(p, curve, first, last)
+            if not projection.NbPoints():
+                return pcurve, None
+            angle = projection.LowerDistanceParameter()
+            mapped.append(angle)
+        mapped.append(last)
+        if not all(math.isfinite(b) and b > a for a, b in zip(mapped, mapped[1:])):
+            return pcurve, None
+        result = Geom2d_BSplineCurve(
+            array([split.Pole(i) for i in range(1, split.NbPoles() + 1)], TColgp_Array1OfPnt2d),
+            array([split.Weight(i) for i in range(1, split.NbPoles() + 1)], TColStd_Array1OfReal),
+            array(mapped, TColStd_Array1OfReal),
+            array([split.Multiplicity(i) for i in range(1, split.NbKnots() + 1)], TColStd_Array1OfInteger),
+            degree, False,
+        )
+        maximum = max(deviation(curve, result, surface, a, b)
+                      for a, b in zip(mapped, mapped[1:]))
+        if maximum <= limit:
+            return result, dict(
+                method="exact UV knot insertion and monotone piecewise affine clock; full per-span 3D checks",
+                spans=len(mapped) - 1, max_deviation_mm=maximum, tolerance_mm=limit,
+                source_knots=old, edge_knots=mapped,
+            )
+    return pcurve, None
+
+
 def project_supported_curve(curve, geometry, first, last, limit):
     from OCP.GeomProjLib import GeomProjLib
     from .cadquery import CadQueryConversionError

@@ -5,8 +5,8 @@ English | [日本語](tolerant-trims.ja.md)
 Version 0.3.3 introduced bounded tolerant boundaries, finite UV domains and
 forward linear pcurve views for ASM 22700 / embedded 22601. The additional
 spline pcurve view and local edge-bound conversion shipped in **0.3.4**.
-The inline and associated curve additions below are **unreleased** and require
-matching core, bridge and Python sources. Model API 2 and the existing views
+The 0.3.5 sources include the inline and associated curve additions below.
+The trim reconciliation additions described separately are **unreleased**. Model API 2 and the existing views
 remain unchanged. See the [model API](model-api.md).
 
 ## Supported boundaries and domains
@@ -61,11 +61,12 @@ converter records the source scalar, placement scale, resolution, effective
 bound and measured deviation in `source_edge_tolerances`. It sets OCCT edge
 and incident vertex tolerances to that bound; their coordinates and all 3D/UV
 poles stay unchanged. `converter.tolerance`, strict source endpoint checks and
-finite UV bounds do not change. Saved pcurve fit tolerances and unknown vertex
-extension scalars never supply additional allowance. Underreported bounds and unsupported charts remain errors.
+finite UV bounds do not change. Saved pcurve fit tolerances and vertex extension scalars never increase this
+TEDGE allowance. The separate associated-fit and endpoint profiles below have
+their own checks. Underreported bounds and unsupported charts remain errors.
 
 
-## Unreleased inline and associated curves
+## Inline and associated curves (0.3.5 sources)
 
 `TolerantCoedge.inline_curve` exposes the observed full `par_int_cur` envelope
 on a plane, sphere or torus. It retains the original raw coedge, value extent,
@@ -104,18 +105,46 @@ parameter hint with its original same-parameter discrepancy reported; it is
 not substituted for the 3D curve. Both saved and derived UV must stay inside
 the support domain. Face attachment is limited to those same supports and
 keeps finite face bounds. This verifies each support distance, not an exact
-intersection or vendor equivalence. Source spline endpoints still require
-original model precision; unknown TVERTEX scalars supply no allowance.
+intersection or vendor equivalence. Source spline endpoints require original model precision unless the bounded
+endpoint profile below independently qualifies their complete incident star.
 
-`supported_curve_checks`, `inline_pcurves`, `associated_pcurves`,
-`tolerant_line_trims`, `tolerant_pcurve_joins`, `plane_wire_orientations` and
-`spline_endpoint_failures` separate these checks and transformations. On the
-pinned Inventor FTC07 2021 regression, all 10 inline views and all 206 tolerant
-coedge boundaries pass. Valid individual faces increase from 245 to 254 of
-258; finite-UV faces remain 5 of 8. Two saved pcurves still exceed their TEDGE
-bounds. Two further faces share a spline endpoint that differs from its saved
-vertex by 0.00652608345231 mm versus 0.00001 mm original resolution. Those faces
-remain rejected; complete FTC07 conversion is still unavailable.
+## Unreleased trim reconciliation
+
+A saved UV spline with a different clock can be split by exact knot insertion
+into rational Bezier spans. A strictly increasing, piecewise affine parameter
+map assigns those unchanged spans to the shared 3D edge. Closest-point
+projection chooses the knot times; OCCT checks the full 3D deviation on every
+span and over the whole result. The complete original UV locus, traversal,
+endpoints and finite chart bounds are retained. No fitted replacement UV or
+clipped projection is used. Backtracking, unresolved error and unknown curve
+profiles reject conversion. `saved_pcurve_reparameterizations` records both
+knot clocks, original discrepancy and accepted per-span maximum.
+
+TEDGE uses keep their original TEDGE bound. For a saved UV fit associated with
+a qualified explicit `int_int_cur`, its own saved fit tolerance plus original
+resolution bounds the UV/3D comparison. The unchanged 3D fit must independently
+pass its own tighter fit bound against both declared supports. Neither fit
+budget is increased by a vertex tolerance. `associated_pcurves` records which
+representation supplied the bound; unknown supports remain unsupported.
+
+The observed ASM 22700 / 22601 endpoint profile requires flag 1, legacy scalar
+-1, and an ordinary owner edge with a checked full `int_int_cur`. The remaining
+two scalars must tightly bound the maximum measured endpoint distance over
+**all incident source edges**, differ by at most original resolution, and not
+consume an incident edge or its opposite point. The outer saved bound applies
+only to the OCCT vertex, whose position stays at the saved source point. No 3D
+poles, global precision or edge/UV allowance changes. Underreported or loose
+scalars, unknown incident curves, and ambiguous joins remain errors. This is a
+bounded observed profile, not a vendor-qualified interpretation of all
+TVERTEX fields. `tolerant_vertex_envelopes` records the source scalars, point,
+owner, full incident star, scale, measured distances and effective bound.
+
+The pinned Inventor FTC07 2021 regression now has 258/258 valid individual
+faces, 8/8 finite-UV faces, and a valid closed single solid containing all 258
+faces. The previously failing faces are 332, 1164, 2336 and 4351. All 206
+tolerant coedge boundaries still pass. This is local source-consistency and
+OCCT validity evidence; Inventor/current Model State and vendor equivalence
+remain unverified.
 
 `pcurve_checks` contains every accepted curve-on-surface check and its applicable
 bound. `pcurve_max_deviation` is the maximum of these checks and can exceed the

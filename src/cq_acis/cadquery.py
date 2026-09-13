@@ -235,6 +235,9 @@ class CadQueryConverter:
         self.plane_wire_orientations: list[dict] = []
         self.inline_pcurves: list[dict] = []
         self.inline_reparameterizations: list[dict] = []
+        self.saved_pcurve_reparameterizations: list[dict] = []
+        self.tolerant_vertex_envelopes: list[dict] = []
+        self._vertex_envelopes = {}
         self.tolerant_line_trims: list[dict] = []
         self.tolerant_pcurve_joins: list[dict] = []
         self._supported_curves = {}
@@ -587,7 +590,9 @@ class CadQueryConverter:
             coedge.edge, EdgeEntity, context=f"coedge ${coedge.index}"
         )
         curve = self._resolve_geometry(edge.curve)
-        tolerant = (edge.index in self._topology_views or coedge.index in self._topology_views
+        from .extensions import TolerantEdge, TolerantCoedge
+        tolerant = (isinstance(self._topology_views.get(edge.index), TolerantEdge)
+                or isinstance(self._topology_views.get(coedge.index), TolerantCoedge)
                 or (isinstance(curve, (EllipseCurveEntity, StraightCurveEntity))
                     and any(isinstance(self.model.resolve(v), RawEntity)
                             for v in (edge.start_vertex, edge.end_vertex))))
@@ -737,6 +742,7 @@ class CadQueryConverter:
         if not math.isfinite(start + end) or sign * (end - start) <= 0:
             raise CadQueryConversionError("invalid B-spline edge interval",
                                           code="geometry.spline_parameter_unsupported")
+        endpoint_bounds = {}
         for parameter, vertex in ((start, edge.start_vertex), (end, edge.end_vertex)):
             if (parameter < curve.knots[0] or parameter > curve.knots[-1]
                     or (curve.parameter_range is not None and (
@@ -760,7 +766,14 @@ class CadQueryConverter:
                 location = self._vertex_location(vertex, context="B-spline endpoint")
             expected = placement.point_vector(location)
             deviation = (point - expected).magnitude
-            if not math.isfinite(deviation) or deviation > self.tolerance:
+            endpoint_limit = self.tolerance
+            if isinstance(tolerant, TolerantVertex) and deviation > self.tolerance:
+                from ._tolerant_vertices import endpoint_envelope
+                envelope = endpoint_envelope(self, vertex, placement)
+                if envelope is not None:
+                    endpoint_limit = envelope['tolerance_mm']
+                    endpoint_bounds[vertex.index] = endpoint_limit
+            if not math.isfinite(deviation) or deviation > endpoint_limit:
                 self.spline_endpoint_failures.append(dict(edge=edge.index, coedge=coedge.index,
                     curve=curve.index, vertex=vertex.index, parameter=parameter,
                     deviation_mm=deviation, tolerance_mm=self.tolerance,
@@ -772,9 +785,10 @@ class CadQueryConverter:
                 self.tolerant_endpoints.append({
                     'vertex': vertex.index, 'edge': edge.index, 'coedge': coedge.index,
                     'curve': curve.index, 'parameter': parameter,
-                    'deviation_mm': deviation, 'tolerance_mm': self.tolerance,
+                    'deviation_mm': deviation, 'tolerance_mm': endpoint_limit,
                     'saved_scalars_source_units': tolerant.saved_scalars,
-                    'method': 'saved spline endpoint matches saved point within model resabs',
+                    'method': ('checked incident-star endpoint envelope' if endpoint_bounds.get(vertex.index)
+                               else 'saved spline endpoint matches saved point within model resabs'),
                 })
         def array(values, cls):
             result = cls(1, len(values))
@@ -790,6 +804,20 @@ class CadQueryConverter:
             if not builder.IsDone():
                 raise ValueError("B-spline edge construction failed")
             result = self.cq.Edge(builder.Edge())
+            if endpoint_bounds:
+                from OCP.BRep import BRep_Builder
+                topology = BRep_Builder()
+                # Only vertex tolerance changes; the edge's fit bound is independent.
+                for vertex in result.Vertices():
+                    actual = Vec3(*vertex.Center().toTuple())
+                    references = (edge.start_vertex, edge.end_vertex)
+                    nearest = min(references, key=lambda r: (placement.point_vector(
+                        self._vertex_location(r, context='spline source vertex')) - actual).magnitude)
+                    target = placement.point_vector(self._vertex_location(nearest, context='spline source vertex'))
+                    limit = endpoint_bounds.get(nearest.index, self.tolerance)
+                    if (target - actual).magnitude > limit:
+                        raise ValueError('ambiguous spline endpoint pairing')
+                    topology.UpdateVertex(vertex.wrapped, gp_Pnt(target.x, target.y, target.z), limit)
         except Exception as error:
             raise CadQueryConversionError("OCCT B-spline edge construction failed") from error
         return self._reverse_edge(result) if edge.reversed ^ coedge.reversed else result
@@ -961,7 +989,7 @@ class CadQueryConverter:
 
     def _check_tolerant_join(self, previous, current, previous_coedge, current_coedge, geometry, placement, limit, loop_index):
         from .extensions import TolerantVertex
-        if placement is None or limit <= self.tolerance or previous_coedge is None or current_coedge is None:
+        if placement is None or previous_coedge is None or current_coedge is None:
             raise CadQueryConversionError(f'loop ${loop_index}: pcurves do not connect',code='geometry.pcurve_connection')
         before=self._require(previous_coedge.edge,EdgeEntity,context='UV join')
         after=self._require(current_coedge.edge,EdgeEntity,context='UV join')
@@ -969,6 +997,12 @@ class CadQueryConverter:
         start=after.end_vertex if current_coedge.reversed else after.start_vertex
         if end!=start or not isinstance(self._tolerant_view(end,context='UV join'),TolerantVertex):
             raise CadQueryConversionError('UV gap lacks a shared tolerant source vertex',code='geometry.pcurve_connection')
+        from ._tolerant_vertices import endpoint_envelope
+        envelope = endpoint_envelope(self, end, placement)
+        if envelope is not None:
+            limit = max(limit, envelope['tolerance_mm'])
+        if limit <= self.tolerance:
+            raise CadQueryConversionError('UV gap lacks a checked source bound', code='geometry.pcurve_connection')
         expected=placement.point_vector(self._vertex_location(end,context='UV join'))
         points=[geometry.surface.Value(*uv) for uv in (previous,current)]
         deviations=[(Vec3(p.X(),p.Y(),p.Z())-expected).magnitude for p in points]
@@ -1032,6 +1066,13 @@ class CadQueryConverter:
                                                       code='geometry.supported_curve_support')
                     associated_limit = (associated.curve.fit_tolerance *
                                         placement.vector(Vec3(1., 0., 0.)).magnitude + self.tolerance)
+                    if saved is not None:
+                        # A saved UV fit on the independently checked associated
+                        # support has its own error budget. The 3D fit still has
+                        # to pass validate_fit against both original supports;
+                        # this UV budget never relaxes that separate check.
+                        associated_limit = (saved.fit_tolerance *
+                                            placement.vector(Vec3(1., 0., 0.)).magnitude + self.tolerance)
                     if pcurve is None:
                         pcurve = project_supported_curve(curve, geometry, first, last, associated_limit)
                 if pcurve is None:
@@ -1062,11 +1103,26 @@ class CadQueryConverter:
                 if check.IsDone() and math.isfinite(check.MaxDistance()) and (inline is not None or check.MaxDistance() > limit):
                     from types import SimpleNamespace
                     source = SimpleNamespace(raw=inline.curve.raw) if inline else saved
-                    limit, source_limit = self._saved_pcurve_tolerance(coedge, source, placement)
+                    saved_limit, source_limit = self._saved_pcurve_tolerance(coedge, source, placement)
+                    if source_limit is not None:
+                        limit = saved_limit
                     if inline and source_limit is not None:
                         source_limit.update(pcurve=None, inline_coedge=coedge.index,
                             value_start=inline.value_start, value_end=inline.value_end,
                             profile='ASM 22700 / 22601; checked inline support and shared TEDGE')
+                if (saved is not None and (source_limit is not None or associated is not None) and check.IsDone()
+                        and math.isfinite(check.MaxDistance()) and check.MaxDistance() > limit):
+                    from ._supported_curves import reparameterize_saved_pcurve
+                    pcurve, certificate = reparameterize_saved_pcurve(
+                        pcurve, curve, surface, first, last, limit)
+                    if certificate is not None:
+                        self.saved_pcurve_reparameterizations.append(dict(
+                            coedge=coedge.index, pcurve=saved.raw.index,
+                            original_deviation_mm=check.MaxDistance(), **certificate))
+                        if getattr(geometry, 'uv_bounds', None) is not None:
+                            self._check_uv_trim(pcurve, first, last, geometry.uv_bounds, loop_index)
+                        check.Perform(Adaptor3d_CurveOnSurface(
+                            Geom2dAdaptor_Curve(pcurve, first, last), GeomAdaptor_Surface(surface)))
                 if not check.IsDone() or not math.isfinite(check.MaxDistance()) or check.MaxDistance() > limit:
                     raise CadQueryConversionError(
                         f"loop ${loop_index}: {'saved' if saved is not None else 'projected'} 2D/3D "
@@ -1087,7 +1143,10 @@ class CadQueryConverter:
                     self.associated_pcurves.append(dict(curve=associated.curve.index,
                         coedge=coedge.index, surface=geometry.source_surface,
                         max_deviation_mm=check.MaxDistance(), tolerance_mm=limit,
-                        method='saved 3D fit projected only onto its checked associated support'))
+                        saved_uv_fit_tolerance_source_units=saved.fit_tolerance if saved is not None else None,
+                        source_3d_fit_tolerance_source_units=associated.curve.fit_tolerance,
+                        method=('unchanged saved UV locus and independent saved UV fit bound; 3D fit checked separately'
+                                if saved is not None else 'saved 3D fit projected only onto its checked associated support')))
                 if inline:
                     self.inline_pcurves.append(dict(coedge=coedge.index, edge=coedge.edge.index,
                         surface=geometry.source_surface, value_start=inline.value_start, value_end=inline.value_end,

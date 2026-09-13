@@ -1,8 +1,8 @@
 """Additive Rust-decoded views; raw entities and model API 2 stay unchanged.
 
 Saved tolerant scalars have incomplete semantics. Conversion uses the observed
-TEDGE bound only with a qualified same-support saved UV curve; other extension
-scalars remain uninterpreted. Subtype extents index RawEntity.values, not bytes.
+TEDGE bound with qualified same-support UV and an independently checked
+incident-star TVERTEX envelope. Other extension scalars remain uninterpreted. Subtype extents index RawEntity.values, not bytes.
 """
 from __future__ import annotations
 from dataclasses import dataclass
