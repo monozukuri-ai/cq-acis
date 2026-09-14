@@ -22,6 +22,25 @@ Placements must be similarity transforms; general nonuniform scale and shear
 are unsupported. Loopless sphere/torus faces with finite saved ranges are
 rejected. General null-curve edges and multi-edge null loops are unsupported.
 
+## Qualified cylinder seams and shell closure (unreleased)
+
+A circular cylinder with two oppositely winding boundaries may need an explicit
+OCCT chart seam. The additional profile accepts ordinary circular/linear edges
+with generated linear UV curves and no finite saved chart bounds. It verifies
+the unchanged cylinder, every source 3D curve, oriented trim coverage (including
+periodic splits), retained source vertices, both seam uses, and curve-on-surface
+deviation at the original model precision. It does not apply general face healing
+or reinterpret saved/tolerant pcurves. A kernel repair that reverses source
+traversal, including the currently unqualified mirrored case, is rejected.
+`periodic_seam_faces` records the source face, loops, edges and validation bounds.
+
+Sewn shells are checked for actual edge incidence, closure and orientation before
+the OCCT `Closed` flag is set. An unset flag alone no longer rejects a closed
+shell; a genuinely open shell is rejected even if its flag is already true.
+`shell_closure_checks` records the original flag and the checked component.
+Open auxiliary bodies are not omitted or promoted to solids. A valid primary
+body therefore does not by itself make complete-file conversion successful.
+
 ## Explicit NURBS profiles
 
 - **SAT 700:** direct `exactsur` surfaces with `nubs` or `nurbs`, open clamped

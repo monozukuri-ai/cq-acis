@@ -224,6 +224,8 @@ class CadQueryConverter:
         self.pcurve_checks: list[dict] = []
         self.degenerate_edges: list[dict] = []
         self.analytic_trim_faces: list[dict] = []
+        self.periodic_seam_faces: list[dict] = []
+        self.shell_closure_checks: list[dict] = []
         self.tolerant_endpoints: list[dict] = []
         self.tolerant_boundaries: list[dict] = []
         self.bounded_surface_faces: list[dict] = []
@@ -1432,6 +1434,11 @@ class CadQueryConverter:
             if not builder.IsDone():
                 raise ValueError(f"OCP face builder error {builder.Error()}")
             result = self.cq.Face(builder.Face())
+            if not result.isValid() and surface.is_cylinder() and surface.is_circular():
+                from ._analytic_seams import cylinder_seam_face
+                repaired = cylinder_seam_face(self, face, loops, wires, geometry, result, placement)
+                if repaired is not None:
+                    result = repaired
         except CadQueryConversionError:
             raise
         except Exception as error:
@@ -1902,16 +1909,13 @@ class CadQueryConverter:
                 self.model.resolve(faces[0].surface), (SphereSurfaceEntity, TorusSurfaceEntity)):
             # Sewing returns a Face for a single closed surface. Retain that
             # face in an explicit shell; closure/validity are still checked.
-            from OCP.BRep import BRep_Builder, BRep_Tool
-            from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_NoError
+            from OCP.BRep import BRep_Builder
             from OCP.TopoDS import TopoDS_Shell
             wrapped = TopoDS_Shell()
             builder = BRep_Builder()
             builder.MakeShell(wrapped)
             for converted_face in result.Faces():
                 builder.Add(wrapped, converted_face.wrapped)
-            if BRep_Tool.IsClosed_s(wrapped) and BRepCheck_Shell(wrapped).Closed() == BRepCheck_NoError:
-                wrapped.Closed(True)
             components = (self.cq.Shell(wrapped),)
         if not components:
             raise CadQueryConversionError(
@@ -1922,11 +1926,26 @@ class CadQueryConverter:
                 raise CadQueryConversionError(
                     f"shell ${shell.index}: component {component_index} is invalid"
                 )
-            if not component.Closed():
-                raise CadQueryConversionError(
-                    f"shell ${shell.index}: component {component_index} is not closed", code="geometry.shell_open"
-                )
+            self._check_shell_closure(component, shell.index, component_index)
         return components
+
+    def _check_shell_closure(self, component, shell_index, component_index):
+        """Qualify edge incidence and orientation before setting OCCT's cache flag."""
+        from OCP.BRep import BRep_Tool
+        from OCP.BRepCheck import BRepCheck_Shell, BRepCheck_NoError
+        check = BRepCheck_Shell(component.wrapped)
+        if not BRep_Tool.IsClosed_s(component.wrapped) or check.Closed() != BRepCheck_NoError:
+            raise CadQueryConversionError(
+                f"shell ${shell_index}: component {component_index} is not closed",
+                code="geometry.shell_open")
+        if check.Orientation() != BRepCheck_NoError:
+            raise CadQueryConversionError(
+                f"shell ${shell_index}: component {component_index} has inconsistent orientation",
+                code="geometry.shell_orientation")
+        was_closed = component.Closed()
+        component.wrapped.Closed(True)
+        self.shell_closure_checks.append(dict(shell=shell_index, component=component_index,
+            flag_was_closed=was_closed, method="OCCT edge incidence, closure and orientation"))
 
     def _lump(self, lump: LumpEntity, placement: _Placement):
         shells = self._linked_entities(
