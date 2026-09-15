@@ -225,6 +225,7 @@ class CadQueryConverter:
         self.degenerate_edges: list[dict] = []
         self.analytic_trim_faces: list[dict] = []
         self.periodic_seam_faces: list[dict] = []
+        self.cylinder_slit_faces: list[dict] = []
         self.shell_closure_checks: list[dict] = []
         self.tolerant_endpoints: list[dict] = []
         self.tolerant_boundaries: list[dict] = []
@@ -1392,11 +1393,17 @@ class CadQueryConverter:
         if not surface.is_circular() and not surface.is_cylinder():
             return self._elliptical_cone_face(face, surface, loops, placement)
         geometry = self._cone_geometry(face, surface, placement)
+        from ._cylinder_slits import cylinder_slit_face
+        slit_face = cylinder_slit_face(self, face, surface, loops, placement, geometry)
+        if slit_face is not None:
+            return self._reverse_face(slit_face) if face.reversed != surface.reversed else slit_face
         apex_face = self._cone_apex_face(face, surface, loops, placement, geometry)
         if apex_face is not None:
             return apex_face
         try:
-            if self._is_full_revolution_face(loops):
+            isosections = self._is_full_revolution_face(loops)
+            oblique_sections = False
+            if isosections:
                 wires = tuple(self._wire(loop, placement) for loop in loops)
                 v_parameters: list[float] = []
                 for wire in wires:
@@ -1409,8 +1416,12 @@ class CadQueryConverter:
                             _, v_parameter = geometry.uv(Vec3(point.X(), point.Y(), point.Z()))
                             values.append(v_parameter)
                         if max(values) - min(values) > geometry.tolerance * 10:
-                            raise CadQueryConversionError("full revolution boundary is not an isocurve")
+                            if not surface.is_cylinder() or not surface.is_circular():
+                                raise CadQueryConversionError("full revolution boundary is not an isocurve")
+                            isosections = False
+                            oblique_sections = True
                         v_parameters.append(values[0])
+            if isosections:
                 lower_v = min(v_parameters)
                 upper_v = max(v_parameters)
                 builder = BRepBuilderAPI_MakeFace(
@@ -1436,7 +1447,8 @@ class CadQueryConverter:
             result = self.cq.Face(builder.Face())
             if not result.isValid() and surface.is_cylinder() and surface.is_circular():
                 from ._analytic_seams import cylinder_seam_face
-                repaired = cylinder_seam_face(self, face, loops, wires, geometry, result, placement)
+                repaired = cylinder_seam_face(self, face, loops, wires, geometry, result, placement,
+                                              elliptic_sections=oblique_sections)
                 if repaired is not None:
                     result = repaired
         except CadQueryConversionError:

@@ -4,15 +4,16 @@ from __future__ import annotations
 import math
 
 
-def cylinder_seam_face(converter, face, loops, wires, geometry, original, placement):
+def cylinder_seam_face(converter, face, loops, wires, geometry, original, placement, *, elliptic_sections=False):
     """Add a chart seam, retaining every oriented source curve and trim interval.
 
-    Only ordinary circular/linear boundaries with generated linear UV curves
-    and two opposite single windings are qualified. Saved/tolerant UV curves
-    and general face healing are deliberately outside this operation.
+    Ordinary circular/linear boundaries use generated linear UV curves. Two
+    complete elliptic plane sections additionally require an analytic support
+    and separation proof. Both paths require opposite single windings; saved
+    UV curves and general face healing are outside this operation.
     """
     from OCP.BRep import BRep_Tool
-    from OCP.Geom import Geom_Circle, Geom_Line
+    from OCP.Geom import Geom_Circle, Geom_Line, Geom_Ellipse
     from OCP.Geom2d import Geom2d_Line
     from OCP.ShapeFix import ShapeFix_Face
     from OCP.TopAbs import TopAbs_REVERSED
@@ -22,8 +23,11 @@ def cylinder_seam_face(converter, face, loops, wires, geometry, original, placem
     if len(loops) != 2 or len(wires) != 2:
         return None
     source_surface = converter._resolve_geometry(face.surface)
+    saved_ranges = (source_surface.u_range, source_surface.v_range)
+    if elliptic_sections:
+        saved_ranges += (source_surface.profile_range,)
     if any(r is not None and (r.lower is not None or r.upper is not None)
-           for r in (source_surface.u_range, source_surface.v_range)):
+           for r in saved_ranges):
         return None
     coedges = [co for loop in loops for co in converter._coedges(loop)]
     if any(co.raw.type_name != 'coedge' or not co.pcurve.is_null for co in coedges):
@@ -31,6 +35,8 @@ def cylinder_seam_face(converter, face, loops, wires, geometry, original, placem
     source_edges = [converter.model.resolve(co.edge) for co in coedges]
     if any(not isinstance(e, EdgeEntity) or e.raw.type_name != 'edge' for e in source_edges):
         return None
+    if elliptic_sections:
+        _check_elliptic_sections(converter, loops, geometry, placement)
     for source_edge in source_edges:
         vertices = [converter.model.resolve(v) for v in (source_edge.start_vertex, source_edge.end_vertex)]
         if any(not isinstance(v, VertexEntity) or v.raw.type_name != 'vertex' for v in vertices):
@@ -49,7 +55,8 @@ def cylinder_seam_face(converter, face, loops, wires, geometry, original, placem
         for edge in wire.Edges():
             curve = BRep_Tool.Curve_s(edge.wrapped, 0., 0.)
             pc = BRep_Tool.CurveOnSurface_s(edge.wrapped, original.wrapped, 0., 0.)
-            if not isinstance(curve, (Geom_Circle, Geom_Line)) or not isinstance(pc, Geom2d_Line):
+            if (not isinstance(curve, (Geom_Circle, Geom_Ellipse) if elliptic_sections else (Geom_Circle, Geom_Line))
+                    or pc is None or (not elliptic_sections and not isinstance(pc, Geom2d_Line))):
                 return None
             first, last = BRep_Tool.Range_s(edge.wrapped)
             start, end = pc.Value(first), pc.Value(last)
@@ -69,6 +76,22 @@ def cylinder_seam_face(converter, face, loops, wires, geometry, original, placem
     if not fixer.FixMissingSeam():
         return None
     result = converter.cq.Face(fixer.Face())
+    # FixMissingSeam may reverse every wire to give the chart its natural
+    # orientation. Restore the source's whole-face sense before checking each
+    # physical use; a mixture of changed senses is never accepted.
+    restored = False
+    if placement.orientation_sign > 0:
+        senses = []
+        for edge in result.Edges():
+            if BRep_Tool.IsClosed_s(edge.wrapped, result.wrapped):
+                continue
+            curve = BRep_Tool.Curve_s(edge.wrapped, 0., 0.)
+            matches = [source for source, saved, _, _ in boundaries if curve == saved]
+            if len(matches) == 1:
+                senses.append(edge.wrapped.Orientation() != matches[0].wrapped.Orientation())
+        if senses and all(senses):
+            result = converter._reverse_face(result)
+            restored = True
     try:
         proof = _check_seam_boundaries(converter, result, geometry.surface, boundaries)
     except CadQueryConversionError:
@@ -78,8 +101,55 @@ def cylinder_seam_face(converter, face, loops, wires, geometry, original, placem
                                       code='geometry.analytic_trim_mismatch') from error
     converter.periodic_seam_faces.append(dict(face=face.index,
         loops=[loop.index for loop in loops], edges=[co.edge.index for co in coedges],
-        method='cylinder chart seam; unchanged oriented 3D curves and complete trim intervals', **proof))
+        method='cylinder chart seam; unchanged oriented 3D curves and complete trim intervals',
+        elliptic_sections=elliptic_sections, source_sense_restored=restored, **proof))
     return result
+
+
+def _check_elliptic_sections(converter, loops, geometry, placement):
+    """Prove two disjoint plane sections of the same circular cylinder.
+
+    The projected major/minor axes must form a radius-R circle. Each section
+    is then a single-valued height c + a*cos(U) + b*sin(U); its full separation
+    from the other section has an analytic minimum, without sample fitting.
+    """
+    from .cadquery import CadQueryConversionError
+    from .model import EdgeEntity, EllipseCurveEntity
+    sections = []
+    tol, radius = converter.tolerance, geometry.radius
+    for loop in loops:
+        coedges = converter._coedges(loop)
+        if len(coedges) != 1:
+            raise CadQueryConversionError('elliptic cylinder section must be a complete rim')
+        edge = converter._require(coedges[0].edge, EdgeEntity,
+                                  context='elliptic cylinder section')
+        curve = converter._resolve_geometry(edge.curve)
+        if not isinstance(curve, EllipseCurveEntity) or edge.start_vertex != edge.end_vertex:
+            raise CadQueryConversionError('elliptic cylinder section must be a closed ellipse')
+        if (edge.start_parameter is None or edge.end_parameter is None
+                or not math.isfinite(edge.start_parameter + edge.end_parameter)
+                or not math.isclose(abs(edge.end_parameter-edge.start_parameter), 2*math.pi,
+                                    rel_tol=0., abs_tol=1e-10)):
+            raise CadQueryConversionError('elliptic cylinder section does not retain a complete saved interval',
+                                          code='geometry.analytic_trim_mismatch')
+        delta = placement.point_vector(curve.center) - geometry.center
+        major = placement.vector(curve.major_axis)
+        normal = placement.oriented_direction(curve.normal).normalized()
+        minor = normal.cross(major) * abs(curve.ratio)
+        axial = normal.dot(geometry.axis)
+        radial_center = delta - geometry.axis * delta.dot(geometry.axis)
+        projected = [v - geometry.axis * v.dot(geometry.axis) for v in (major, minor)]
+        if (radial_center.magnitude > tol or abs(axial) < 1e-8 or abs(normal.dot(major)) > tol
+                or any(abs(v.magnitude-radius) > tol for v in projected)
+                or abs(projected[0].dot(projected[1])) > tol*radius):
+            raise CadQueryConversionError('ellipse is not a section of the source cylinder',
+                                          code='geometry.analytic_trim_mismatch')
+        sections.append((delta.dot(geometry.axis), -radius*normal.dot(geometry.x_direction)/axial,
+                         -radius*normal.dot(geometry.y_direction)/axial))
+    dc, da, db = (b-a for a, b in zip(*sections))
+    if abs(dc) - math.hypot(da, db) <= tol:
+        raise CadQueryConversionError('cylinder section boundaries intersect or touch',
+                                      code='geometry.analytic_trim_mismatch')
 
 
 def _check_seam_boundaries(converter, result, surface, boundaries):

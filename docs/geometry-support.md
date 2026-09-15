@@ -41,6 +41,33 @@ shell; a genuinely open shell is rejected even if its flag is already true.
 Open auxiliary bodies are not omitted or promoted to solids. A valid primary
 body therefore does not by itself make complete-file conversion successful.
 
+## Oblique cylinder sections and paired generator loops (unreleased)
+
+Two disjoint, complete elliptic plane sections of a circular cylinder can bound
+an oblique band. Projected ellipse axes must form the original radius circle;
+the difference between the two sinusoidal height functions must be strictly
+positive over the full period. Every source trim interval, curve, vertex and
+orientation is checked after adding the chart seam. Generated UV curves are
+checked at the source model precision. If the kernel reverses every physical
+boundary together, the complete face sense is restored before verification;
+individual reversals or changed curves are rejected.
+
+A second profile accepts two complete coaxial circular rims and ordinary paired
+straight-edge loops on one interior cylinder generator. The source edges become
+segments of the chart seam, with two opposite uses each. Connecting seam segments
+are added between them, and the circular rims are subdivided at their saved
+vertices. This keeps all source 3D lines, intervals and vertices in the face and
+through STEP roundtrips. The generated chart may rotate, but the physical
+cylinder remains unchanged. `cylinder_slit_faces` records the original loop,
+edge and coedge mapping, seam segments and measured errors.
+
+Overlapping or touching trims, inconsistent rim senses, different generators,
+mismatching saved endpoints/parameter clocks, finite saved charts, saved pcurves
+and mirrored paired-loop placements are not admitted by this profile. No source
+loop is dropped or converted into a STEP-invisible internal edge. These checks
+qualify individual faces; other unsupported curves and surfaces can still stop
+complete-part conversion.
+
 ## Explicit NURBS profiles
 
 - **SAT 700:** direct `exactsur` surfaces with `nubs` or `nurbs`, open clamped
