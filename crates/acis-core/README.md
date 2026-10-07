@@ -52,3 +52,41 @@ tolerant topology/subtype views are available within the
 [documented geometry scope](https://github.com/monozukuri-ai/cq-acis/blob/main/docs/geometry-support.md).
 Views retain the source raw records and do not guarantee complete geometry.
 Use `acis-py-bridge` when exchanging this model with Python `cq-acis`.
+
+## Experimental source-free SAB authoring
+
+`authoring::BoxSpec` builds one axis-aligned solid from millimetre dimensions
+and a minimum corner. `encode::SabEncoder` emits only the
+`Asm23200MetricBox` profile: width 4, scale 10, resabs 1e-6 source units,
+resnor 1e-10, planes, straight curves, and closed box topology. It does not
+read a template, source SAB, raw entity payload, or Inventor API. This API
+is experimental and has no whole-IPT or general ACIS editing contract.
+
+```rust
+use acis_core::authoring::BoxSpec;
+use acis_core::encode::{HistoryMode, SabEncoder};
+
+let generated = BoxSpec::new((20.0, 30.0, 40.0).into(), (5.0, -10.0, 0.0).into()).build()?;
+let bytes = SabEncoder::default().encode(&generated, HistoryMode::None)?;
+assert!(bytes.starts_with(b"ASM BinaryFile4"));
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Sizes must be at least 0.00032 mm (32 absolute tolerances) and at most
+1,000,000 mm. Each minimum/maximum coordinate must be within +/-1,000,000 mm.
+There are exactly 86 active entities. Topology/ownership, reciprocal partners,
+loop closure and orientation, analytic charts, finite values, semantic IDs,
+and output byte/entity budgets are checked before encoding.
+
+The encoder accepts an immutable `AuthoredBox`, which only the builder can
+construct. `validate_box` can separately check parsed geometry without granting
+it encoder input rights. `HistoryMode::None` is intended for source geometry;
+`InsertionOnlyStateOne` constructs a fresh insertion-only history for a final
+BRep. The SAB reader retains history as opaque; its successful read alone is
+not history or native-kernel qualification. Native acceptance and document
+integration require separate oracle tests. Other versions, rotations, attributes,
+and arbitrary source history have no write fallback.
+
+The Rust-only `author_box` example takes an output filename, three sizes, three
+minimum-corner coordinates, and `source` or `result`. It refuses to replace an
+existing output file.

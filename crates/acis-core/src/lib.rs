@@ -6,6 +6,8 @@
 #![doc = include_str!("../README.md")]
 
 mod asm_nurbs;
+pub mod authoring;
+pub mod encode;
 pub mod entities;
 pub mod geometry;
 pub mod nurbs;
