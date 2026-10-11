@@ -22,10 +22,13 @@ acis-core = { path = "crates/acis-core", version = "=0.3.2" }
 acis-py-bridge = { path = "crates/acis-py-bridge", version = "=0.3.2" }
 ''', encoding='utf-8')
         (self.root / 'pyproject.toml').write_text('[project]\nname = "cq-acis"\ndynamic = ["version"]\n', encoding='utf-8')
+        locked = ['version = 4\n']
         for name in ('acis-core', 'acis-py-bridge', 'cq-acis-py'):
             directory = self.root / 'crates' / name
             directory.mkdir(parents=True)
             (directory / 'Cargo.toml').write_text(f'[package]\nname = "{name}"\nversion.workspace = true\n', encoding='utf-8')
+            locked.append(f'[[package]]\nname = "{name}"\nversion = "0.3.2"\n')
+        (self.root / 'Cargo.lock').write_text('\n'.join(locked), encoding='utf-8')
 
     def test_version_comes_from_rust_workspace(self):
         self.assertEqual(project_version(self.root), '0.3.2')
@@ -50,6 +53,23 @@ acis-py-bridge = { path = "crates/acis-py-bridge", version = "=0.3.2" }
                                                  f'path = "crates/{name}", version = "=0.2.1"'), encoding='utf-8')
                 with self.assertRaisesRegex(ValueError, f'{name} dependency must be pinned'):
                     project_version(self.root)
+
+    def test_stale_workspace_lock_version_is_rejected(self):
+        path = self.root / 'Cargo.lock'
+        original = path.read_text(encoding='utf-8')
+        for name in ('acis-core', 'acis-py-bridge', 'cq-acis-py'):
+            with self.subTest(name=name):
+                path.write_text(original.replace(f'name = "{name}"\nversion = "0.3.2"',
+                                                 f'name = "{name}"\nversion = "0.3.1"'), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, f'Cargo.lock must contain {name} at workspace version 0.3.2'):
+                    project_version(self.root)
+
+    def test_missing_workspace_lock_entry_is_rejected(self):
+        path = self.root / 'Cargo.lock'
+        path.write_text(path.read_text(encoding='utf-8').replace(
+            '[[package]]\nname = "cq-acis-py"\nversion = "0.3.2"\n', ''), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'Cargo.lock must contain cq-acis-py at workspace version 0.3.2'):
+            project_version(self.root)
 
 
 class ReleaseChecks(unittest.TestCase):
