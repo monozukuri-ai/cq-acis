@@ -1,9 +1,8 @@
 # Experimental analytic authoring
 
-The 0.3.10 release candidate provides `from_cadquery` for one closed CadQuery solid.
+Version 0.3.10 provides `from_cadquery` for one closed CadQuery solid.
 It constructs an immutable semantic ACIS model and an experimental ASM 23200
-SAB candidate without an Inventor API, native file, or template. This addition
-has not been released or qualified by the native kernel. It does not write IPT.
+SAB candidate without an Inventor API, native file, or template. Native kernel qualification is outside this API's scope. It does not write IPT.
 
 ```python
 import cadquery as cq

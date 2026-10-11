@@ -1,8 +1,8 @@
 # 実験段階のanalytic authoring
 
-開発checkoutに`from_cadquery`を追加しました。単一の閉じたCadQuery solidから
+0.3.10で`from_cadquery`を追加しました。単一の閉じたCadQuery solidから
 共有ACISモデルとASM 23200 SAB候補を生成します。Inventor API・nativeファイル・
-templateは生成の入力にしません。未リリース・native未適格で、IPT出力は含みません。
+templateは生成の入力にしません。native kernelによる適格性の確認はこのAPIの範囲外で、IPT出力は含みません。
 
 ```python
 import cadquery as cq
@@ -41,6 +41,6 @@ Rustの`FaceSpec` loopは面の向きを適用する前の支持曲面に従い�
 
 ## 意味付きの形状仕様
 
-0.3.10リリース候補の `authored.to_spec()` は共有頂点・辺・支持面・face loopを
+0.3.10の `authored.to_spec()` は共有頂点・辺・支持面・face loopを
 mm単位の独立したJSON互換値として返します。文書writerへの入力用で、IPTやSABのbyte列は含みません。
 返された値を変更しても元の形状には反映しません。共有model APIのversionは2を維持します。
