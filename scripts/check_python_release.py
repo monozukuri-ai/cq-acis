@@ -22,13 +22,20 @@ def project_version(root: Path = ROOT) -> str:
     project = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']
     if 'version' in project or 'version' not in project.get('dynamic', []):
         raise ValueError('Python version must be inherited from Cargo via project.dynamic')
+    locked = tomllib.loads((root / 'Cargo.lock').read_text(encoding='utf-8'))['package']
     for member in workspace['members']:
         package = tomllib.loads((root / member / 'Cargo.toml').read_text(encoding='utf-8'))['package']
         if package.get('version') != {'workspace': True}:
             raise ValueError(f'{package["name"]} must inherit workspace.package.version')
+        versions = [entry['version'] for entry in locked
+                    if entry['name'] == package['name'] and 'source' not in entry]
+        if versions != [version]:
+            raise ValueError(f'Cargo.lock must contain {package["name"]} at workspace version {version}; '
+                             'run python scripts/bump_version.py --offline')
     for name in ('acis-core', 'acis-py-bridge'):
         if workspace['dependencies'][name]['version'] != f'={version}':
-            raise ValueError(f'{name} dependency must be pinned to ={version}')
+            raise ValueError(f'{name} dependency must be pinned to ={version}; '
+                             'run python scripts/bump_version.py --offline')
     return version
 
 
