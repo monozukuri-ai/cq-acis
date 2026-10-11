@@ -31,10 +31,11 @@ def project_version(root: Path = ROOT) -> str:
                     if entry['name'] == package['name'] and 'source' not in entry]
         if versions != [version]:
             raise ValueError(f'Cargo.lock must contain {package["name"]} at workspace version {version}; '
-                             'run cargo update --workspace --offline')
+                             'run python scripts/bump_version.py --offline')
     for name in ('acis-core', 'acis-py-bridge'):
         if workspace['dependencies'][name]['version'] != f'={version}':
-            raise ValueError(f'{name} dependency must be pinned to ={version}')
+            raise ValueError(f'{name} dependency must be pinned to ={version}; '
+                             'run python scripts/bump_version.py --offline')
     return version
 
 
