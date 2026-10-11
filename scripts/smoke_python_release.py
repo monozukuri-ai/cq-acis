@@ -37,6 +37,17 @@ def installed_smoke(corpus: Path) -> None:
         assert abs(solid.Volume() - 777**3) < 1e-3
     print('Native SAT/SAB/CadQuery assertions passed; checking interpreter shutdown', flush=True)
 
+    import cadquery as cq
+    from cq_acis import from_cadquery
+    solid = cq.Workplane('XY').circle(3).extrude(8).val()
+    authored = from_cadquery(solid)
+    spec = authored.to_spec()
+    assert spec['faces'] and spec['edges'] and spec['vertices_mm']
+    rebuilt = to_cadquery(parse_sab_model(authored.to_sab())).val()
+    assert rebuilt.isValid() and len(rebuilt.Solids()) == 1
+    assert abs(rebuilt.Volume() - solid.Volume()) < 1e-7
+    assert authored.native_qualified is False
+
 
 def clean_install(wheel: Path, interpreter: str) -> None:
     with tempfile.TemporaryDirectory(prefix='cq-acis-wheel-') as temporary:

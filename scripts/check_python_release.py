@@ -59,6 +59,8 @@ def check_archives(directory: Path, version: str, wheels: int, sdists: int) -> d
                     raise ValueError(f'Expected a Python 3.10 ABI3 wheel: {path.name}')
                 if not any(n.startswith('cq_acis/_native.') and n.endswith(('.so', '.pyd')) for n in names):
                     raise ValueError('Wheel is missing the native extension')
+                if 'cq_acis/authoring.py' not in names:
+                    raise ValueError('Wheel is missing the semantic authoring API')
                 meta = [n for n in names if n.endswith('.dist-info/METADATA')]
                 if len(meta) != 1:
                     raise ValueError('Expected one wheel metadata file')
@@ -68,7 +70,8 @@ def check_archives(directory: Path, version: str, wheels: int, sdists: int) -> d
                 names = archive.getnames()
                 prefix = f'cq_acis-{version}/'
                 required = ['pyproject.toml', 'Cargo.toml', 'Cargo.lock', 'crates/acis-core/src/lib.rs',
-                            'crates/acis-py-bridge/src/lib.rs',
+                            'crates/acis-py-bridge/src/lib.rs', 'crates/acis-core/src/authoring/brep.rs',
+                            'src/cq_acis/authoring.py',
                             'crates/cq-acis-py/src/lib.rs', 'src/cq_acis/__init__.py', 'PKG-INFO']
                 if any(prefix + member not in names for member in required):
                     raise ValueError('Source distribution is missing a required build input')
@@ -76,7 +79,7 @@ def check_archives(directory: Path, version: str, wheels: int, sdists: int) -> d
                 if member is None:
                     raise ValueError('Missing sdist metadata')
                 metadata(member.read(), version)
-        leaked = any(part in {'corpus', '.venv', 'target', '.git'} for name in names for part in Path(name).parts)
+        leaked = any(part in {'corpus', '.internal', '.local', '.venv', 'target', '.git'} for name in names for part in Path(name).parts)
         if path.suffix == '.whl':
             leaked |= any('tests' in Path(name).parts for name in names)
         else:

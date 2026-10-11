@@ -5,6 +5,7 @@ Start with the [English README](../README.md) or
 
 | Guide | Contents |
 | --- | --- |
+| [Analytic authoring](authoring.md) / [日本語](authoring.ja.md) | CadQuery solids to semantic models and experimental SAB |
 | [Usage](usage.md) | Parse, convert, handle errors, export, and inspect shapes |
 | [Shared model API](model-api.md) / [日本語](model-api.ja.md) | External decoders, metadata, references, raw data, and native models |
 | [Geometry support](geometry-support.md) | Supported geometry and conversion limitations |

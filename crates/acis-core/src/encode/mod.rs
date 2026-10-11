@@ -9,6 +9,8 @@ use std::{error::Error, fmt};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SabWriteProfile {
     Asm23200MetricBox,
+    /// Analytic B-rep candidate; native kernel pcurve derivation is unqualified.
+    Asm23200AnalyticExperimental,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryMode {
@@ -69,11 +71,29 @@ impl SabEncoder {
         generated: &AuthoredBox,
         history: HistoryMode,
     ) -> Result<Vec<u8>, EncodeError> {
-        match self.profile {
-            SabWriteProfile::Asm23200MetricBox => {}
+        if self.profile != SabWriteProfile::Asm23200MetricBox {
+            return Err(EncodeError::InvalidField);
         }
         validate_box(generated.model()).map_err(EncodeError::InvalidModel)?;
-        if generated.model().entities().len() > self.limits.max_entities {
+        self.encode_model(generated.model(), history)
+    }
+    /// Only a semantic BrepSpec builder can supply this immutable value.
+    pub fn encode_brep(
+        &self,
+        generated: &crate::authoring::brep::AuthoredBrep,
+        history: HistoryMode,
+    ) -> Result<Vec<u8>, EncodeError> {
+        if self.profile != SabWriteProfile::Asm23200AnalyticExperimental {
+            return Err(EncodeError::InvalidField);
+        }
+        self.encode_model(generated.model(), history)
+    }
+    fn encode_model(
+        &self,
+        model: &crate::AcisModel,
+        history: HistoryMode,
+    ) -> Result<Vec<u8>, EncodeError> {
+        if model.entities().len() > self.limits.max_entities {
             return Err(EncodeError::BudgetExceeded);
         }
         let mut w = Writer {
@@ -94,11 +114,11 @@ impl SabEncoder {
         w.text("cq-acis")?;
         w.text(&format!("ASM {ASM_VERSION} NT"))?;
         w.text("")?;
-        let metadata = generated.model().metadata();
+        let metadata = model.metadata();
         for value in [metadata.units_mm, metadata.resabs, metadata.resnor] {
             w.number(value.ok_or(EncodeError::InvalidField)?)?;
         }
-        for entity in generated.model().entities() {
+        for entity in model.entities() {
             w.name(&entity.raw().type_name)?;
             w.reference(entity.raw().attributes)?;
             let id: i32 = entity
@@ -176,12 +196,34 @@ impl SabEncoder {
                     w.range(x.u_range)?;
                     w.range(x.v_range)?;
                 }
+                Entity::EllipseCurve(x) => {
+                    w.reference(x.pattern)?;
+                    w.vector(19, x.center)?;
+                    w.vector(20, x.normal)?;
+                    w.vector(20, x.major_axis)?;
+                    w.number(x.ratio)?;
+                    w.range(x.parameter_range)?;
+                }
+                Entity::ConeSurface(x) => {
+                    w.reference(x.pattern)?;
+                    w.vector(19, x.center)?;
+                    w.vector(20, x.axis)?;
+                    w.vector(20, x.major_axis)?;
+                    w.number(x.ratio)?;
+                    w.range(x.profile_range)?;
+                    w.number(x.sin_half_angle)?;
+                    w.number(x.cos_half_angle)?;
+                    w.number(x.parameter_scale)?;
+                    w.boolean(x.reversed)?;
+                    w.range(x.u_range)?;
+                    w.range(x.v_range)?;
+                }
                 _ => return Err(EncodeError::InvalidField),
             }
             w.append(&[17])?;
         }
         if history == HistoryMode::InsertionOnlyStateOne {
-            w.insertion_history(generated.model().entities().len())?;
+            w.insertion_history(model.entities().len())?;
         }
         // The native terminator is a lineage name, without a tag17 trailer.
         w.name("End-of-ASM-data")?;

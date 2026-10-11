@@ -12,6 +12,8 @@ use pyo3::{
     IntoPyObjectExt,
 };
 use std::sync::{Arc, OnceLock};
+#[cfg(feature = "python-module")]
+mod authoring;
 pyo3::import_exception!(cq_acis.model, AcisModelError);
 fn model_error(message: impl ToString) -> PyErr {
     AcisModelError::new_err(message.to_string())
@@ -432,6 +434,8 @@ fn geometry<'py>(
 #[cfg(feature = "python-module")]
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(authoring::author_analytic, module)?)?;
+    module.add_class::<authoring::AuthoredBrep>()?;
     module.add_function(wrap_pyfunction!(parse_sab_model, module)?)?;
     module.add_function(wrap_pyfunction!(decode_sat_exactsur, module)?)?;
     module.add_class::<NativeModel>()?;

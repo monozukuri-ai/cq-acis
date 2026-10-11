@@ -20,6 +20,7 @@ license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt"]
 
 [tool.maturin]
+strip = true
 manifest-path = "crates/cq-acis-py/Cargo.toml"
 python-source = "src"
 module-name = "cq_acis._native"

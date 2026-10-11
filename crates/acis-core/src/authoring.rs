@@ -3,6 +3,7 @@
 //! This is a generated-model API, not an editor for parsed entities. No source
 //! records, opaque payloads, attributes, transforms, or general history enter it.
 use crate::*;
+pub mod brep;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,

@@ -56,7 +56,7 @@ Use `acis-py-bridge` when exchanging this model with Python `cq-acis`.
 ## Experimental source-free SAB authoring
 
 `authoring::BoxSpec` builds one axis-aligned solid from millimetre dimensions
-and a minimum corner. `encode::SabEncoder` emits only the
+and a minimum corner. The default `encode::SabEncoder` emits the
 `Asm23200MetricBox` profile: width 4, scale 10, resabs 1e-6 source units,
 resnor 1e-10, planes, straight curves, and closed box topology. It does not
 read a template, source SAB, raw entity payload, or Inventor API. This API
@@ -90,3 +90,11 @@ and arbitrary source history have no write fallback.
 The Rust-only `author_box` example takes an output filename, three sizes, three
 minimum-corner coordinates, and `source` or `result`. It refuses to replace an
 existing output file.
+
+The separate `authoring::brep::BrepSpec` and
+`SabWriteProfile::Asm23200AnalyticExperimental` add semantic topology for planes,
+circular cylinders, lines, circles and ellipses. `encode_brep` accepts only the
+immutable builder result, with explicit byte/entity budgets. This candidate is
+not native-qualified. Its pcurves are absent and require kernel derivation;
+whole-IPT document integration is not implemented. See the Python
+[analytic authoring documentation](https://github.com/monozukuri-ai/cq-acis/blob/main/docs/authoring.md).

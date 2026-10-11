@@ -1,6 +1,7 @@
 """Shared ACIS models, SAT parsing, and optional CadQuery conversion."""
 
 from ._native import NativeModel
+from .authoring import AuthoredShape, AuthoringError, from_cadquery
 from .extensions import (
     TolerantVertex, TolerantEdge, TolerantCoedge, SubtypeDefinition,
     SupportedCurve, UvSpline, SubtypeReference, SubtypeTable, ResolvedSubtype, LinearSurfacePcurve, SplineSurfacePcurve,
@@ -75,6 +76,7 @@ from .cadquery import (
 )
 
 __all__ = [
+    "AuthoredShape", "AuthoringError", "from_cadquery",
     "TolerantVertex", "TolerantEdge", "TolerantCoedge", "SubtypeDefinition",
     "SubtypeReference", "SubtypeTable", "ResolvedSubtype",
     "LinearSurfacePcurve",

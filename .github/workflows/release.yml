@@ -18,6 +18,7 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/workspace
 
 jobs:
   verify:
