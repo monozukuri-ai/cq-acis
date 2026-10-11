@@ -4,9 +4,14 @@ use acis_core::authoring::brep::*;
 use acis_core::encode::{HistoryMode, SabEncoder, SabWriteLimits, SabWriteProfile};
 use pyo3::types::PyList;
 
-fn vector(item: &Bound<'_, PyAny>, key: &str) -> PyResult<Vec3> {
-    let (x, y, z) = item.get_item(key)?.extract::<(f64, f64, f64)>()?;
+fn coordinates(item: &Bound<'_, PyAny>) -> PyResult<Vec3> {
+    // Fixed-size arrays accept both OCCT adapter tuples and JSON lists,
+    // while retaining the coordinate count and numeric type checks.
+    let [x, y, z] = item.extract::<[f64; 3]>()?;
     Ok((x, y, z).into())
+}
+fn vector(item: &Bound<'_, PyAny>, key: &str) -> PyResult<Vec3> {
+    coordinates(&item.get_item(key)?)
 }
 fn bounded<'py>(item: Bound<'py, PyAny>, limit: usize) -> PyResult<Bound<'py, PyList>> {
     let list = item.cast_into::<PyList>()?;
@@ -64,9 +69,7 @@ pub fn author_analytic(spec: &Bound<'_, PyAny>) -> PyResult<AuthoredBrep> {
         tolerance_mm: spec.get_item("tolerance_mm")?.extract()?,
     };
     for v in vertices {
-        input
-            .vertices_mm
-            .push(v.extract::<(f64, f64, f64)>()?.into());
+        input.vertices_mm.push(coordinates(&v)?);
     }
     for e in edges {
         let c = e.get_item("curve")?;
@@ -115,8 +118,11 @@ pub fn author_analytic(spec: &Bound<'_, PyAny>) -> PyResult<AuthoredBrep> {
             }
             let mut row = Vec::new();
             for u in walk {
-                let (edge, reversed) = u.extract::<(usize, bool)>()?;
-                row.push(EdgeUse { edge, reversed });
+                let [edge, reversed] = u.extract::<[Bound<'_, PyAny>; 2]>()?;
+                row.push(EdgeUse {
+                    edge: edge.extract()?,
+                    reversed: reversed.extract()?,
+                });
             }
             loops.push(row);
         }

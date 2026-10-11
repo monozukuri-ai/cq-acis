@@ -68,6 +68,8 @@ class AuthoredShape:
 
         Only values produced by ``from_cadquery`` retain this specification.
         Mutating the returned dictionary never changes this authored value.
+        The result, including after a JSON round trip, can be passed to
+        ``_native.author_analytic`` to rebuild the generated model.
         """
         if not self._semantic_json:
             raise AuthoringError('semantic specification unavailable')

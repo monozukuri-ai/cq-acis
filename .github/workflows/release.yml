@@ -66,6 +66,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             manylinux: "2014"
             interpreter: python3.11
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "2014"
+            interpreter: python3.11
           - platform: windows-x86_64
             runner: windows-2025
             target: x86_64-pc-windows-msvc
@@ -167,7 +172,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Verify complete artifact set and PyPI retry compatibility
-        run: python scripts/check_python_release.py --dist dist --wheels 4 --sdists 1 --check-pypi
+        run: python scripts/check_python_release.py --dist dist --wheels 5 --sdists 1 --check-pypi
       - name: Publish with Trusted Publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
