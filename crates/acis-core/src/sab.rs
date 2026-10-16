@@ -236,7 +236,10 @@ pub fn parse_sab(data: &[u8], source_id: &str, limits: &SabLimits) -> Result<Sab
     let version = c.word()?;
     let allowed = match container {
         AcisContainer::Sab => version == 21800,
-        AcisContainer::AsmSab => matches!(version, 22000 | 22300 | 22600 | 22700 | 22900 | 23200),
+        AcisContainer::AsmSab => matches!(
+            version,
+            22000 | 22300 | 22600 | 22700 | 22900 | 23100 | 23200
+        ),
         _ => false,
     };
     if !allowed {

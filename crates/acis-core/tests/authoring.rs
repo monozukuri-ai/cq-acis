@@ -339,3 +339,72 @@ fn insertion_history_has_independently_checked_framing_and_coverage() {
     assert_eq!(name(suffix, &mut position), "End-of-ASM-data");
     assert_eq!(position, suffix.len());
 }
+
+#[test]
+fn explicit_asm23100_box_preserves_topology_geometry_and_history() {
+    for origin in [(0., 0., 0.), (-123., 45., 600.)] {
+        let generated = BoxSpec::new((20., 30., 40.).into(), origin.into())
+            .build()
+            .unwrap();
+        for history in [HistoryMode::None, HistoryMode::InsertionOnlyStateOne] {
+            let newer = SabEncoder::default().encode(&generated, history).unwrap();
+            let older = SabEncoder::new(
+                SabWriteProfile::Asm23100MetricBox,
+                SabWriteLimits::default(),
+            )
+            .encode(&generated, history)
+            .unwrap();
+            let a = parse_sab(&older, "target", &SabLimits::default()).unwrap();
+            let b = parse_sab(&newer, "target", &SabLimits::default()).unwrap();
+            assert_eq!(a.header.save_version, 23100);
+            assert_eq!(a.header.modeler_version, "ASM 231.6.4.65535 NT");
+            assert_eq!(
+                a.model.entities().len(),
+                BOX_ENTITY_COUNT + usize::from(history != HistoryMode::None)
+            );
+            assert_eq!(a.history.is_some(), history != HistoryMode::None);
+            // Every semantic geometry/topology field is invariant across targets.
+            for (left, right) in a
+                .model
+                .entities()
+                .iter()
+                .skip(1)
+                .zip(b.model.entities().iter().skip(1))
+            {
+                assert_eq!(left, right);
+            }
+            let mut bounds = [f64::INFINITY; 6];
+            bounds[3..].fill(f64::NEG_INFINITY);
+            for entity in a.model.entities() {
+                if let Entity::Point(point) = entity {
+                    for (i, value) in [point.location.x, point.location.y, point.location.z]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        bounds[i] = bounds[i].min(value * 10.);
+                        bounds[i + 3] = bounds[i + 3].max(value * 10.);
+                    }
+                }
+            }
+            for (a, b) in bounds.into_iter().zip([
+                origin.0,
+                origin.1,
+                origin.2,
+                origin.0 + 20.,
+                origin.1 + 30.,
+                origin.2 + 40.,
+            ]) {
+                close(a, b);
+            }
+        }
+    }
+    assert_eq!(
+        SabEncoder::new(
+            SabWriteProfile::Asm23100AnalyticExperimental,
+            SabWriteLimits::default()
+        )
+        .encode(&spec().build().unwrap(), HistoryMode::None)
+        .unwrap_err(),
+        EncodeError::InvalidField
+    );
+}

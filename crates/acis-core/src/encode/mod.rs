@@ -1,7 +1,7 @@
 //! Exact-profile SAB encoding of generated models. Parsed/raw entities cannot
 //! enter this API; opaque records and opaque history are never copied.
 use crate::{
-    authoring::{validate_box, AuthoredBox, AuthoringError, ASM_VERSION, BOX_ENTITY_COUNT},
+    authoring::{validate_box, AuthoredBox, AuthoringError, BOX_ENTITY_COUNT},
     Entity, EntityRef, ParameterRange, Vec3,
 };
 use std::{error::Error, fmt};
@@ -9,8 +9,12 @@ use std::{error::Error, fmt};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SabWriteProfile {
     Asm23200MetricBox,
+    /// Metric box targeting ASM 23100 (Inventor 2026).
+    Asm23100MetricBox,
     /// Analytic B-rep candidate; native kernel pcurve derivation is unqualified.
     Asm23200AnalyticExperimental,
+    /// Analytic geometry targeting ASM 23100; bounded kernel profile.
+    Asm23100AnalyticExperimental,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryMode {
@@ -43,13 +47,17 @@ impl fmt::Display for EncodeError {
         match self {
             Self::InvalidModel(e) => write!(f, "{e}"),
             Self::BudgetExceeded => write!(f, "SAB write budget exceeded"),
-            Self::InvalidField => write!(f, "field outside the ASM 23200 write profile"),
+            Self::InvalidField => write!(f, "field outside the selected ASM write profile"),
         }
     }
 }
 impl Error for EncodeError {}
 
 /// Bounded encoder. Only explicitly supported output profiles are selectable.
+///
+/// The profile selects the SAB save version and both ASM version strings.
+/// Authored models are immutable semantic input; their default metadata is not
+/// mutated when selecting an older output target. Default output remains 23200.
 pub struct SabEncoder {
     profile: SabWriteProfile,
     limits: SabWriteLimits,
@@ -71,7 +79,10 @@ impl SabEncoder {
         generated: &AuthoredBox,
         history: HistoryMode,
     ) -> Result<Vec<u8>, EncodeError> {
-        if self.profile != SabWriteProfile::Asm23200MetricBox {
+        if !matches!(
+            self.profile,
+            SabWriteProfile::Asm23200MetricBox | SabWriteProfile::Asm23100MetricBox
+        ) {
             return Err(EncodeError::InvalidField);
         }
         validate_box(generated.model()).map_err(EncodeError::InvalidModel)?;
@@ -83,7 +94,11 @@ impl SabEncoder {
         generated: &crate::authoring::brep::AuthoredBrep,
         history: HistoryMode,
     ) -> Result<Vec<u8>, EncodeError> {
-        if self.profile != SabWriteProfile::Asm23200AnalyticExperimental {
+        if !matches!(
+            self.profile,
+            SabWriteProfile::Asm23200AnalyticExperimental
+                | SabWriteProfile::Asm23100AnalyticExperimental
+        ) {
             return Err(EncodeError::InvalidField);
         }
         self.encode_model(generated.model(), history)
@@ -100,11 +115,18 @@ impl SabEncoder {
             bytes: Vec::new(),
             limit: self.limits.max_bytes,
         };
+        let (save_version, asm_version) =
+            match self.profile {
+                SabWriteProfile::Asm23100MetricBox
+                | SabWriteProfile::Asm23100AnalyticExperimental => (23100, "231.6.4.65535"),
+                SabWriteProfile::Asm23200MetricBox
+                | SabWriteProfile::Asm23200AnalyticExperimental => (23200, "232.6.0.65535"),
+            };
         w.append(b"ASM BinaryFile4")?;
         // Native framing: record count unspecified (zero); top-level entries
         // are asmheader and one body. Bit one is the native ASM profile flag.
         for value in [
-            23200,
+            save_version,
             0,
             2,
             if history == HistoryMode::None { 2 } else { 3 },
@@ -112,7 +134,7 @@ impl SabEncoder {
             w.append(&i32::to_le_bytes(value))?;
         }
         w.text("cq-acis")?;
-        w.text(&format!("ASM {ASM_VERSION} NT"))?;
+        w.text(&format!("ASM {asm_version} NT"))?;
         w.text("")?;
         let metadata = model.metadata();
         for value in [metadata.units_mm, metadata.resabs, metadata.resnor] {
@@ -130,7 +152,7 @@ impl SabEncoder {
                 .map_err(|_| EncodeError::InvalidField)?;
             w.integer(id)?;
             match entity {
-                Entity::Raw(_) if entity.index() == 0 => w.text(ASM_VERSION)?,
+                Entity::Raw(_) if entity.index() == 0 => w.text(asm_version)?,
                 Entity::Body(x) => w.references(&[x.pattern, x.lump, x.wire, x.transform])?,
                 Entity::Lump(x) => w.references(&[x.pattern, x.next_lump, x.shell, x.body])?,
                 Entity::Shell(x) => {
