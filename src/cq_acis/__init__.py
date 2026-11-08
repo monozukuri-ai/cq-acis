@@ -65,10 +65,12 @@ from .entities import (
     parse_sat_model,
 )
 from .cadquery import (
+    BACKENDS,
     CadQueryConversionError,
     CadQueryConverter,
     CadQueryDependencyError,
     convert_model,
+    convert_model_occt,
     convert_sat_model,
     import_sat_data,
     import_sat_file,
@@ -92,6 +94,7 @@ __all__ = [
     "AcisModelView",
     "AcisValue",
     "AcisContainer",
+    "BACKENDS",
     "BodyEntity",
     "CadQueryConversionError",
     "CadQueryConverter",
@@ -133,6 +136,7 @@ __all__ = [
     "VertexEntity",
     "build_entity_graph",
     "convert_model",
+    "convert_model_occt",
     "convert_sat_model",
     "decode_entity",
     "decode_sat_model",

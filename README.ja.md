@@ -23,20 +23,23 @@ English: [README.md](README.md)
 
 ## インストール
 
-**Python 3.11 以降**が必要です。依存パッケージとして CadQuery 2.8 以降もインストールします。
+**Python 3.11 以降**が必要です。解析と共有モデルだけなら幾何カーネルは不要で、
+形状への変換には次のどちらかの extra を選びます。
 
 ```bash
-python -m pip install cq-acis
+python -m pip install "cq-acis[cadquery]"  # CadQuery 2.8 以降: Shape・Workplane・authoring
+python -m pip install "cq-acis[occt]"      # CadQuery なしで、cadquery-ocp-novtk 経由の OCCT の形状
 ```
 
-ビルド済み wheel のインストールに Rust は不要です。ソースからインストールする場合は、
-Rust 1.83 以降と C リンカを用意し、リポジトリのルートで実行します。
+`pip install cq-acis` だけでは解析と共有モデルだけが入ります(0.4.0 以降。それ以前は
+常に CadQuery を入れていました)。ビルド済み wheel のインストールに Rust は不要です。
+ソースからインストールする場合は、Rust 1.83 以降と C リンカを用意し、リポジトリのルートで実行します。
 
 ```bash
-python -m pip install -e .
+python -m pip install -e ".[cadquery]"
 ```
 
-CadQuery の対応プラットフォームの条件も適用されます。
+CadQuery または OCP の対応プラットフォームの条件も適用されます。
 
 ## 簡単な使用例
 
@@ -72,6 +75,14 @@ from cq_acis import parse_sab_model, to_cadquery
 model = parse_sab_model(Path("model.sab").read_bytes(), source_id="model.sab")
 print(model.diagnostics)
 result = to_cadquery(model)
+```
+
+CadQuery なし(`cq-acis[occt]`)なら、OCCT の形状にそのまま変換します。
+
+```python
+from cq_acis import convert_model_occt
+
+shapes = convert_model_occt(model)  # 本体ごとに 1 つの TopoDS_Shape
 ```
 
 解析に成功しても、すべての形状を変換できるとは限りません。

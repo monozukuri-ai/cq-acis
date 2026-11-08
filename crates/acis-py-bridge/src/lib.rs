@@ -33,7 +33,7 @@ pub fn ensure_python_model_api(py: Python<'_>) -> PyResult<()> {
         .and_then(|v| v.extract::<u32>());
     if version.ok() != Some(MODEL_API_VERSION) {
         return Err(pyo3::exceptions::PyImportError::new_err(
-            "acis-py-bridge requires cq-acis Python model API 2 (cq-acis >=0.3.0,<0.4); install a compatible native wheel"));
+            "acis-py-bridge requires cq-acis Python model API 2 (cq-acis >=0.3.0,<0.5); install a compatible native wheel"));
     }
     Ok(())
 }

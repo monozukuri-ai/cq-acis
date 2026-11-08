@@ -18,6 +18,9 @@ requirements. Other signatures or save versions raise `ValueError`.
 
 Typed records include body, lump, shell, face, loop, coedge, edge, vertex,
 point, straight, ellipse, plane, cone/cylinder, sphere, torus, and transform.
+A transform is accepted both as the SAT-style text of 16 fields and as the
+ASM binary form (three row vectors, the translation, the scale and the
+rotate/reflect/shear flags) that Inventor's embedded ASM 22000 writes.
 Names with `-curve` and `-surface` suffixes are accepted. Unknown entities,
 attributes, and unfamiliar layouts remain `RawEntity`; schema limitations are
 reported with `sab.entity_schema_unsupported`. See [geometry support](geometry-support.md)

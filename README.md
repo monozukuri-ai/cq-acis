@@ -26,20 +26,24 @@ See [geometry support and limitations](docs/geometry-support.md) and
 
 ## Installation
 
-Requires **Python 3.11 or newer**. CadQuery 2.8 or later is installed as a dependency.
+Requires **Python 3.11 or newer**. Parsing and the shared model need no
+geometry kernel; shape conversion needs one of two extras:
 
 ```bash
-python -m pip install cq-acis
+python -m pip install "cq-acis[cadquery]"  # CadQuery 2.8 or later: shapes, Workplanes, authoring
+python -m pip install "cq-acis[occt]"      # bare OCCT shapes via cadquery-ocp-novtk, without CadQuery
 ```
 
-Installing a prebuilt wheel does not require Rust. To install from a source
-checkout, install Rust 1.83 or newer and a C linker first, then run:
+A plain `pip install cq-acis` installs only the parser and the shared model
+(since 0.4.0; earlier releases always installed CadQuery). Installing a prebuilt
+wheel does not require Rust. To install from a source checkout, install Rust
+1.83 or newer and a C linker first, then run:
 
 ```bash
-python -m pip install -e .
+python -m pip install -e ".[cadquery]"
 ```
 
-CadQuery's platform requirements also apply.
+The platform requirements of CadQuery or OCP also apply.
 
 ## Quick start
 
@@ -75,6 +79,14 @@ from cq_acis import parse_sab_model, to_cadquery
 model = parse_sab_model(Path("model.sab").read_bytes(), source_id="model.sab")
 print(model.diagnostics)
 result = to_cadquery(model)
+```
+
+Without CadQuery (`cq-acis[occt]`), convert to bare OCCT shapes instead:
+
+```python
+from cq_acis import convert_model_occt
+
+shapes = convert_model_occt(model)  # one TopoDS_Shape per body
 ```
 
 Parsing a file does not guarantee that all its geometry can be converted.

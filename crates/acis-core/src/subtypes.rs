@@ -304,8 +304,16 @@ fn resolve(
         .chain(&raw.values[6..])
         .cloned()
         .collect();
+    // Aliases are decoded against the container's save version; models without
+    // one (the explicit profile was first observed on 22700) keep that default.
+    let save_version = model
+        .metadata()
+        .save_version
+        .as_ref()
+        .and_then(|version| u32::try_from(version).ok())
+        .unwrap_or(22700);
     let mut geometry =
-        crate::asm_nurbs::decode(&expanded, 22700)?.ok_or("subtype geometry not decoded")?;
+        crate::asm_nurbs::decode(&expanded, save_version)?.ok_or("subtype geometry not decoded")?;
     // Never label expanded bytes as original source bytes.
     match &mut geometry {
         Entity::BSplineSurface(s) => s.raw = raw.clone(),

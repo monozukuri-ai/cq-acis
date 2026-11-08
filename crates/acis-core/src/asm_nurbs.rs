@@ -1,5 +1,9 @@
-//! Explicit ASM 22700 / embedded 22601 splines with a bounded default trailer.
+//! Explicit ASM splines with a bounded default trailer.
 //!
+//! The profile was observed on ASM 22700 records whose embedded subtype
+//! version is 22601, and is accepted for every supported ASM save version as
+//! long as the embedded version does not exceed the save version and the
+//! record matches the explicit grammar exactly (otherwise it stays raw).
 //! This is an observed profile, not a general procedural subtype interpreter.
 //! Support surfaces, pcurves, subtype references, reversal, non-default trailer
 //! fields and nonzero fitting tolerances are deliberately not admitted.
@@ -156,9 +160,6 @@ impl Reader<'_> {
 }
 
 pub(crate) fn decode(raw: &RawEntity, save_version: u32) -> Result<Option<Entity>, String> {
-    if save_version != 22700 {
-        return Ok(None);
-    }
     let kind = match (raw.type_name.as_str(), raw.values.get(3)) {
         ("intcurve-curve", Some(AcisValue::String(s))) if s == "exact_int_cur" => 1,
         ("spline-surface", Some(AcisValue::String(s))) if s == "exact_spl_sur" => 2,
@@ -179,8 +180,13 @@ pub(crate) fn decode(raw: &RawEntity, save_version: u32) -> Result<Option<Entity
     } else {
         "exact_spl_sur"
     })?;
-    r.int(22601)?;
-    r.int(0)?; // Embedded profile and full representation.
+    // The embedded subtype version (22000, 22220, 22502 and 22601 observed) is
+    // recorded in the raw record; it may not exceed the container's save version.
+    let embedded = r.integer()?;
+    if !(20000..=save_version as usize).contains(&embedded) {
+        return Err("unqualified embedded ASM spline version".into());
+    }
+    r.int(0)?; // Full representation.
     let rational = match r.take()? {
         AcisValue::String(s) if s == "nubs" => false,
         AcisValue::String(s) if s == "nurbs" => true,
@@ -344,7 +350,27 @@ mod tests {
         assert!((p.x - 4. / 3.).abs() < 1e-12);
         assert!((p.y - 1.5).abs() < 1e-12);
         assert!((p.z - 4. / 3.).abs() < 1e-12);
-        assert!(decode(&raw, 22600).unwrap().is_none());
+        // Every supported save version admits the explicit profile, but the
+        // embedded version may not exceed the container's save version.
+        assert!(matches!(
+            decode(&raw, 23200),
+            Ok(Some(Entity::BSplineSurface(_)))
+        ));
+        assert!(decode(&raw, 22600).is_err());
+    }
+
+    #[test]
+    fn embedded_version_follows_the_container_save_version() {
+        let mut raw = surface();
+        raw.values[4] = AcisValue::Integer(22000.into());
+        for version in [22000, 22300, 22600, 22700, 22900, 23100, 23200] {
+            assert!(matches!(
+                decode(&raw, version),
+                Ok(Some(Entity::BSplineSurface(_)))
+            ));
+        }
+        raw.values[4] = AcisValue::Integer(19999.into());
+        assert!(decode(&raw, 22700).is_err());
     }
 
     #[test]
@@ -363,7 +389,7 @@ mod tests {
         }
         for (pos, value) in [
             (1, AcisValue::Bytes(vec![10])),
-            (4, AcisValue::Integer(22602.into())),
+            (4, AcisValue::Integer(22701.into())),
         ] {
             let mut changed = raw.clone();
             changed.values[pos] = value;

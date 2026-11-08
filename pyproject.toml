@@ -8,7 +8,15 @@ dynamic = ["version"]
 description = "ACIS SAT/SAB parsing experiments for CadQuery"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [
+# Parsing and the shared model need no geometry kernel. Shape conversion needs
+# one of the extras below (0.4.0; earlier releases required CadQuery outright).
+dependencies = []
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt"]
+
+[project.optional-dependencies]
+# CadQuery shapes and Workplanes (to_cadquery, import_sat_*, from_cadquery).
+cadquery = [
     "cadquery>=2.8",
     # These Windows wheels use different SWIG runtime tables. Loading versions
     # that share a table can corrupt the heap during interpreter shutdown.
@@ -16,8 +24,8 @@ dependencies = [
     "casadi==3.7.2; sys_platform == 'win32'",
     "nlopt==2.11.0; sys_platform == 'win32'",
 ]
-license = "MIT"
-license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt"]
+# Bare OCCT shapes through OCP without VTK (convert_model_occt, backend="occt").
+occt = ["cadquery-ocp-novtk>=7.9.3.1,<7.10"]
 
 [tool.maturin]
 strip = true

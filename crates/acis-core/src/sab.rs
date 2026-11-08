@@ -487,6 +487,9 @@ impl Reader<'_> {
         self.pos += 1;
         Ok(&t.value)
     }
+    fn peek(&self) -> Option<&Value> {
+        self.tokens.get(self.pos).map(|t| &t.value)
+    }
     fn reference(&mut self) -> Result<EntityRef> {
         match self.next()? {
             Value::Ref(v) => Ok(*v),
@@ -750,38 +753,59 @@ fn decode(r: &mut Reader<'_>, raw: RawEntity) -> Result<Option<Entity>> {
             v_range: r.range()?,
         }),
         "transform" => {
-            let text = r.text()?;
-            let words = text.split_whitespace().collect::<Vec<_>>();
-            if words.len() != 16 {
-                return Err(error(r.offset, "transform requires 16 fields"));
-            }
-            let numbers = words[..13]
-                .iter()
-                .map(|s| {
-                    s.parse::<f64>()
-                        .map_err(|_| error(r.offset, "invalid transform number"))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            if !numbers.iter().all(|x| x.is_finite()) {
-                return Err(error(r.offset, "nonfinite transform"));
-            }
-            let flag = |i, a, b| {
-                if words[i] == a {
-                    Ok(true)
-                } else if words[i] == b {
-                    Ok(false)
-                } else {
-                    Err(error(r.offset, "invalid transform flag"))
+            let text_form = matches!(r.peek(), Some(Value::Text(_)));
+            if text_form {
+                // SAT-style text form: 16 whitespace-separated fields.
+                let text = r.text()?;
+                let words = text.split_whitespace().collect::<Vec<_>>();
+                if words.len() != 16 {
+                    return Err(error(r.offset, "transform requires 16 fields"));
                 }
-            };
-            Entity::Transform(TransformEntity {
-                raw,
-                matrix_values: numbers[..12].try_into().unwrap(),
-                scale: numbers[12],
-                rotated: flag(13, "rotate", "no_rotate")?,
-                reflected: flag(14, "reflect", "no_reflect")?,
-                sheared: flag(15, "shear", "no_shear")?,
-            })
+                let numbers = words[..13]
+                    .iter()
+                    .map(|s| {
+                        s.parse::<f64>()
+                            .map_err(|_| error(r.offset, "invalid transform number"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                if !numbers.iter().all(|x| x.is_finite()) {
+                    return Err(error(r.offset, "nonfinite transform"));
+                }
+                let flag = |i, a, b| {
+                    if words[i] == a {
+                        Ok(true)
+                    } else if words[i] == b {
+                        Ok(false)
+                    } else {
+                        Err(error(r.offset, "invalid transform flag"))
+                    }
+                };
+                Entity::Transform(TransformEntity {
+                    raw,
+                    matrix_values: numbers[..12].try_into().unwrap(),
+                    scale: numbers[12],
+                    rotated: flag(13, "rotate", "no_rotate")?,
+                    reflected: flag(14, "reflect", "no_reflect")?,
+                    sheared: flag(15, "shear", "no_shear")?,
+                })
+            } else {
+                // ASM binary form (observed in Inventor's embedded ASM 22000):
+                // three row vectors and the translation as tagged vectors, then
+                // the scale and the rotate / reflect / shear flags.
+                let mut matrix_values = [0.0; 12];
+                for row in matrix_values.chunks_exact_mut(3) {
+                    let v = r.vector()?;
+                    row.copy_from_slice(&[v.x, v.y, v.z]);
+                }
+                Entity::Transform(TransformEntity {
+                    raw,
+                    matrix_values,
+                    scale: r.number()?,
+                    rotated: r.boolean()?,
+                    reflected: r.boolean()?,
+                    sheared: r.boolean()?,
+                })
+            }
         }
         _ => return Ok(None),
     };

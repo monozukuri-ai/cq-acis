@@ -13,14 +13,38 @@ from pathlib import Path
 from cq_acis import convert_model, parse_sat_model, to_cadquery
 
 model = parse_sat_model(Path("model.sat").read_bytes())
-shapes = convert_model(model)  # Tuple of CadQuery shapes, one per source body.
-result = to_cadquery(model)    # CadQuery Workplane containing those shapes.
+shapes = convert_model(model)  # One shape per source body (CadQuery, or OCCT wrappers without it).
+result = to_cadquery(model)    # CadQuery Workplane containing those shapes; needs cq-acis[cadquery].
 ```
 
 For a SAT file, `import_sat_file(path)` combines parsing and conversion.
 `import_sat_data(data)` does the same for SAT text or bytes. Binary input uses
 `parse_sab_model()` followed by `convert_model()` or `to_cadquery()`; see
 [SAB/ASM support](sab-support.md).
+
+## OCCT shapes without CadQuery
+
+`convert_model_occt(model)` returns one `TopoDS_Shape` per body and needs only
+`OCP` (`cq-acis[occt]`). `CadQueryConverter(model, backend="occt")` exposes the
+same conversion through lightweight wrappers whose `wrapped` attribute is the
+OCCT shape and whose `Faces()`, `Edges()`, `Volume()`, `isValid()` and similar
+accessors mirror CadQuery's. `backend="auto"`, the default of `convert_model()`
+and of the converter, uses CadQuery when it is installed and OCCT otherwise;
+`to_cadquery()` and `import_sat_*` always require `cq-acis[cadquery]`. The
+accepted geometry and every check are identical across backends.
+
+```python
+from pathlib import Path
+from OCP.BRepGProp import BRepGProp
+from OCP.GProp import GProp_GProps
+from cq_acis import convert_model_occt, parse_sab_model
+
+model = parse_sab_model(Path("model.sab").read_bytes(), source_id="model.sab")
+for shape in convert_model_occt(model):
+    properties = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, properties)
+    print(properties.Mass())
+```
 
 ## Errors and diagnostics
 

@@ -450,7 +450,8 @@ fn unqualified_explicit_spline_records_stay_raw_with_source_diagnostics() {
     let mut cases = vec![];
     for (index, value) in [
         (1, AcisValue::Bytes(vec![10])),
-        (4, AcisValue::Integer(22602.into())),
+        // An embedded subtype version above the container's save version.
+        (4, AcisValue::Integer(22701.into())),
         (5, AcisValue::Integer(1.into())),
         (7, AcisValue::Integer(usize::MAX.into())),
         (8, AcisValue::Integer(2.into())),
@@ -478,8 +479,15 @@ fn unqualified_explicit_spline_records_stay_raw_with_source_diagnostics() {
             .iter()
             .any(|d| d.code == "sab.entity_schema_unsupported"));
     }
+    // Embedded 22601 exceeds an older container's save version: raw, not an error.
     let old = parse(&explicit_fixture(&base, 4, 22600)).unwrap();
     assert!(matches!(old.model.entities()[1], Entity::Raw(_)));
+    // The same explicit grammar decodes in every accepted container when the
+    // embedded version fits (Inventor's ASM 22000 writes exact_int_cur 22000).
+    let mut early = base.clone();
+    early[4] = AcisValue::Integer(22000.into());
+    let early = parse(&explicit_fixture(&early, 4, 22000)).unwrap();
+    assert!(matches!(early.model.entities()[1], Entity::BSplineCurve(_)));
     for length in 0..base.len() {
         let raw = RawEntity {
             values: base[..length].to_vec(),
@@ -589,4 +597,56 @@ fn explicit_asm_surface_decodes_tensor_order_and_refuses_trailer_changes() {
     let mut periodic = raw;
     periodic.values[9] = I(2.into());
     assert!(crate::asm_nurbs::decode(&periodic, 22700).is_err());
+}
+
+#[test]
+fn transform_records_decode_in_text_and_binary_forms() {
+    fn vector(out: &mut Vec<u8>, x: f64, y: f64, z: f64) {
+        out.push(20);
+        for v in [x, y, z] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    // ASM binary form: three row vectors, the translation, the scale and the
+    // rotate / reflect / shear flags (Inventor's embedded ASM 22000 writes this).
+    let mut binary = Vec::new();
+    vector(&mut binary, 1., 0., 0.);
+    vector(&mut binary, 0., 1., 0.);
+    vector(&mut binary, 0., 0., 1.);
+    vector(&mut binary, 5., 6., 7.);
+    binary.push(6);
+    binary.extend_from_slice(&2.0_f64.to_le_bytes());
+    binary.extend_from_slice(&[11, 10, 11]);
+    // SAT-style text form with the same values.
+    let words = b"1 0 0 0 1 0 0 0 1 5 6 7 2 no_rotate reflect no_shear";
+    let mut text = vec![7, words.len() as u8];
+    text.extend_from_slice(words);
+    for fields in [binary.clone(), text] {
+        let doc = parse(&fixture(4, 0, Some(("transform", fields)))).unwrap();
+        let Entity::Transform(t) = &doc.model.entities()[1] else {
+            panic!("transform not decoded")
+        };
+        assert_eq!(
+            t.matrix_values,
+            [1., 0., 0., 0., 1., 0., 0., 0., 1., 5., 6., 7.]
+        );
+        assert_eq!(t.scale, 2.);
+        assert_eq!((t.rotated, t.reflected, t.sheared), (false, true, false));
+        let p = t.transform_point((1., 1., 1.).into());
+        assert_eq!((p.x, p.y, p.z), (7., 8., 9.));
+        assert!(!doc
+            .model
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == "sab.entity_schema_unsupported"));
+    }
+    // A short binary record stays raw with a schema diagnostic; the parse succeeds.
+    let truncated = binary[..binary.len() - 1].to_vec();
+    let doc = parse(&fixture(4, 0, Some(("transform", truncated)))).unwrap();
+    assert!(matches!(doc.model.entities()[1], Entity::Raw(_)));
+    assert!(doc
+        .model
+        .diagnostics()
+        .iter()
+        .any(|d| d.code == "sab.entity_schema_unsupported"));
 }

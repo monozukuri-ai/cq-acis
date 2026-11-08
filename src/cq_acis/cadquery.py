@@ -208,16 +208,64 @@ def _load_cadquery():
     return cq
 
 
-class CadQueryConverter:
-    """Build exact analytic CadQuery B-reps from a shared ACIS model."""
+def _load_occt_shapes():
+    """The OCCT-only wrappers; they need ``OCP`` (cq-acis[occt]) but not CadQuery."""
+    try:
+        from . import _occt_shapes
+    except ImportError as error:
+        raise CadQueryDependencyError(
+            "OCCT conversion requires the optional dependency; "
+            "install cq-acis[occt] or cq-acis[cadquery]"
+        ) from error
+    return _occt_shapes
 
-    def __init__(self, model: AcisModelView):
+
+BACKENDS = ("auto", "cadquery", "occt")
+
+
+def _load_backend(backend: str):
+    """Return ``(namespace, name)`` for the shape backend.
+
+    ``"cadquery"`` returns the ``cadquery`` module and produces CadQuery shapes.
+    ``"occt"`` returns the bare-OCP wrappers of :mod:`cq_acis._occt_shapes`,
+    whose ``wrapped`` attribute is the ``TopoDS_Shape``. ``"auto"`` prefers
+    CadQuery when it is installed and otherwise falls back to OCCT.
+    """
+    if backend == "cadquery":
+        return _load_cadquery(), "cadquery"
+    if backend == "occt":
+        return _load_occt_shapes(), "occt"
+    if backend == "auto":
+        try:
+            return _load_cadquery(), "cadquery"
+        except CadQueryDependencyError:
+            try:
+                return _load_occt_shapes(), "occt"
+            except CadQueryDependencyError as error:
+                raise CadQueryDependencyError(
+                    "Shape conversion requires an optional dependency; "
+                    "install cq-acis[cadquery] or cq-acis[occt]"
+                ) from error
+    raise ValueError(f"unknown backend {backend!r}; expected one of {BACKENDS}")
+
+
+class CadQueryConverter:
+    """Build exact analytic B-reps from a shared ACIS model.
+
+    ``backend`` selects the shape wrappers: ``"cadquery"`` builds CadQuery
+    shapes, ``"occt"`` builds bare OCCT shapes (``.wrapped`` is the
+    ``TopoDS_Shape``) without importing CadQuery, and ``"auto"`` (default) uses
+    CadQuery when installed and OCCT otherwise. The geometry that is accepted
+    and the checks that are applied do not depend on the backend.
+    """
+
+    def __init__(self, model: AcisModelView, *, backend: str = "auto"):
         # CadQuery walks the same references repeatedly. Materialize the Python
         # view once instead of copying native entity fields on every lookup.
         if isinstance(model, NativeModel):
             model = model.to_model()
         self.model = model
-        self.cq = _load_cadquery()
+        self.cq, self.backend = _load_backend(backend)
         unit_scale = model.metadata.units_mm or 1.0
         self.tolerance = (model.metadata.resabs or 1e-6) * unit_scale
         self.pcurve_max_deviation = 0.0
@@ -2046,25 +2094,45 @@ class CadQueryConverter:
     def workplane(self) -> cq.Workplane:
         """Return converted body shapes on a CadQuery Workplane stack."""
 
+        if self.backend != "cadquery":
+            raise CadQueryDependencyError(
+                "A CadQuery Workplane requires cq-acis[cadquery]; with the OCCT "
+                "backend use convert() or convert_model_occt() for TopoDS shapes"
+            )
         return self.cq.Workplane("XY").newObject(self.convert())
 
 
-def convert_model(model: AcisModelView) -> tuple[cq.Shape, ...]:
-    """Convert the supported bodies in any shared ACIS model to CadQuery shapes."""
+def convert_model(model: AcisModelView, *, backend: str = "auto") -> tuple[cq.Shape, ...]:
+    """Convert the supported bodies in any shared ACIS model, one shape per body.
 
-    return CadQueryConverter(model).convert()
+    With the CadQuery backend the shapes are ``cadquery.Shape`` instances; with
+    the OCCT backend they are :mod:`cq_acis._occt_shapes` wrappers whose
+    ``wrapped`` attribute is the ``TopoDS_Shape``. See :class:`CadQueryConverter`.
+    """
+
+    return CadQueryConverter(model, backend=backend).convert()
 
 
-def convert_sat_model(model: AcisModelView) -> tuple[cq.Shape, ...]:
+def convert_model_occt(model: AcisModelView) -> tuple:
+    """Convert the supported bodies to OCCT ``TopoDS_Shape`` objects without CadQuery.
+
+    Requires ``OCP`` (``cq-acis[occt]`` or ``cq-acis[cadquery]``). The result holds
+    one ``TopoDS_Solid`` or ``TopoDS_Compound`` per source body, in body order.
+    """
+
+    return tuple(shape.wrapped for shape in CadQueryConverter(model, backend="occt").convert())
+
+
+def convert_sat_model(model: AcisModelView, *, backend: str = "auto") -> tuple[cq.Shape, ...]:
     """Backward-compatible entrypoint; accepts SatModel and AcisModel."""
 
-    return convert_model(model)
+    return convert_model(model, backend=backend)
 
 
 def to_cadquery(model: AcisModelView) -> cq.Workplane:
     """Convert an AcisModel or legacy SatModel to a CadQuery Workplane."""
 
-    return CadQueryConverter(model).workplane()
+    return CadQueryConverter(model, backend="cadquery").workplane()
 
 
 def import_sat_data(data: str | bytes) -> cq.Workplane:

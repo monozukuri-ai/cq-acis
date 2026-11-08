@@ -72,10 +72,14 @@ complete-part conversion.
 
 - **SAT 700:** direct `exactsur` surfaces with `nubs` or `nurbs`, open clamped
   U/V directions, and no extra fields. Other SAT spline profiles stay raw.
-- **ASM 22700 / embedded 22601:** forward explicit `exact_int_cur` curves and
-  `exact_spl_sur` surfaces, including qualified subtype references. The admitted
-  profile requires open clamped splines, no singularities, zero fit tolerance,
-  and the supported default record fields. Unknown extensions remain raw.
+- **ASM (every accepted save version):** forward explicit `exact_int_cur`
+  curves and `exact_spl_sur` surfaces, including qualified subtype references.
+  The profile was observed on ASM 22700 records with embedded subtype version
+  22601; since 0.4.0 it is admitted for every accepted save version, provided
+  the embedded version does not exceed the container's save version
+  (22000, 22220, 22502 and 22601 have been observed). The admitted profile
+  requires open clamped splines, no singularities, zero fit tolerance, and the
+  supported default record fields; a record that does not match stays raw.
   Curves require saved edge parameters and null support surfaces/pcurves.
   Surface bounds may be unbounded or a supported [finite UV domain](tolerant-trims.md).
 

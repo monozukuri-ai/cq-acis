@@ -40,7 +40,8 @@ decoded geometry or active-state ownership.
 
 `geometry` implements vectors, ellipse and cone evaluation, plane directions,
 and the ACIS row-vector transform convention. It does not construct OCCT solids.
-Use Python `cq-acis` for conversion to supported CadQuery B-reps.
+Use Python `cq-acis` for conversion to supported B-reps (CadQuery shapes with
+`cq-acis[cadquery]`, or bare OCCT shapes with `cq-acis[occt]`).
 
 `sab::parse_sab` accepts the supported binary profiles and returns this model;
 see [SAB/ASM support](https://github.com/monozukuri-ai/cq-acis/blob/main/docs/sab-support.md)
