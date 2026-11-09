@@ -51,7 +51,8 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           python -m pip install 'maturin[patchelf]==1.11.5'
-          maturin develop --release --locked
+          # CadQuery is an extra since 0.4.0; the regressions exercise both backends.
+          maturin develop --release --locked --extras cadquery
           python -m unittest discover -s tests -v
 
   wheels:
