@@ -221,6 +221,9 @@ def _load_occt_shapes():
 
 
 BACKENDS = ("auto", "cadquery", "occt")
+# Boundaries of a face on a stored fit are accepted within this multiple of
+# the fit tolerance saved with it (plus the model tolerance).
+_STORED_FIT_MARGIN = 2.0
 
 
 def _load_backend(backend: str):
@@ -1170,6 +1173,7 @@ class CadQueryConverter:
         loop_start = None
         previous_limit = first_limit = self.tolerance
         previous_allowance = first_allowance = 0.0
+        singular = []
         location = TopLoc_Location()
         parameter_tolerance = self.tolerance / max(geometry.radius, 1.0)
         for i, edge in enumerate(edges):
@@ -1220,10 +1224,29 @@ class CadQueryConverter:
                 allowance = self._approximation_tolerance(getattr(geometry, 'source_geometry', None))
                 if coedge is not None:
                     allowance += self._approximation_tolerances.get(source_edge.curve.index, 0.0)
-                if pcurve is None:
+                if pcurve is None and not allowance:
                     pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, self.tolerance * 0.1)
-                if pcurve is None and allowance:
-                    pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, allowance)
+                    if pcurve is not None and not pcurve.IsPeriodic() and (
+                            pcurve.FirstParameter() > first + 1e-9 or pcurve.LastParameter() < last - 1e-9):
+                        # The projector kept only part of the edge range (a full
+                        # turn on a periodic support); sample the whole range.
+                        pcurve = self._sampled_pcurve(curve, surface, first, last, periods, self.tolerance)
+                elif pcurve is None:
+                    # The projector can also throw on a fitted curve or support;
+                    # the sampled pcurve then stands in, under the same check.
+                    for projection_tolerance in (self.tolerance * 0.1, allowance):
+                        try:
+                            pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, projection_tolerance)
+                        except Exception:  # OCP raises unrelated Standard_* classes.
+                            pcurve = None
+                        if pcurve is not None and not pcurve.IsPeriodic() and (
+                                pcurve.FirstParameter() > first + 1e-9 or pcurve.LastParameter() < last - 1e-9):
+                            pcurve = None  # The projector kept only part of the edge range.
+                        if pcurve is not None:
+                            break
+                    if pcurve is None:
+                        pcurve = self._sampled_pcurve(
+                            curve, surface, first, last, periods, self.tolerance + allowance)
                 if pcurve is None:
                     raise ValueError("projection returned no curve")
                 start, end = pcurve.Value(first), pcurve.Value(last)
@@ -1246,7 +1269,9 @@ class CadQueryConverter:
                     Geom2dAdaptor_Curve(pcurve, first, last), GeomAdaptor_Surface(surface)))
                 limit, source_limit = associated_limit or self.tolerance, None
                 if allowance:
-                    limit = max(limit, self.tolerance + allowance)
+                    # The saved fit tolerance is the modeller's own estimate; an
+                    # exact boundary may sit slightly further from the fit.
+                    limit = max(limit, self.tolerance + allowance * _STORED_FIT_MARGIN)
                     if not check.IsDone() or not math.isfinite(check.MaxDistance()) or check.MaxDistance() > limit:
                         # OCCT's projector can fail on a fitted curve or support
                         # (a seam crossing, a slightly off-surface curve). Sample
@@ -1299,9 +1324,13 @@ class CadQueryConverter:
                         f"mm; allowed {limit:.9g} mm; model tolerance {self.tolerance:.9g} mm)",
                         code="geometry.pcurve_mismatch")
                 if previous_end is not None and any(abs(previous_end[d]-uv_start[d]-shift[d])>parameter_tolerance*10 for d in range(2)):
-                    self._check_tolerant_join(previous_end,[uv_start[d]+shift[d] for d in range(2)],
+                    join = [uv_start[d]+shift[d] for d in range(2)]
+                    self._check_tolerant_join(previous_end,join,
                         coedges[i-1] if coedges else None,coedge,geometry,placement,max(previous_limit,limit),loop_index,
                         approximated=bool(allowance or previous_allowance))
+                    if (allowance or previous_allowance) and self._singular_segment(
+                            surface, previous_end, join, max(previous_limit, limit)):
+                        singular.append((i, previous_end, join, surface.Value(*join), max(previous_limit, limit)))
                 self.pcurve_max_deviation = max(self.pcurve_max_deviation, check.MaxDistance())
                 self.pcurve_count += 1
                 self.pcurve_checks.append({"loop": loop_index,
@@ -1360,10 +1389,65 @@ class CadQueryConverter:
             if period is not None:
                 delta = (delta + period / 2) % period - period / 2
             if abs(delta) > parameter_tolerance * 10:
-                self._check_tolerant_join(previous_end,loop_start,coedges[-1] if coedges else None,
+                closing = list(loop_start)
+                for axis, axis_period in enumerate(periods):
+                    if axis_period is not None:
+                        closing[axis] += round((previous_end[axis] - loop_start[axis]) / axis_period) * axis_period
+                self._check_tolerant_join(previous_end,closing,coedges[-1] if coedges else None,
                     coedges[0] if coedges else None,geometry,placement,max(previous_limit,first_limit),loop_index,
                     approximated=bool(previous_allowance or first_allowance))
+                if (previous_allowance or first_allowance) and self._singular_segment(
+                        surface, previous_end, closing, max(previous_limit, first_limit)):
+                    singular.append((len(edges), previous_end, closing, surface.Value(*closing),
+                                     max(previous_limit, first_limit)))
                 break
+        return singular
+
+    def _degenerated_edge(self, surface, start, end, point, limit):
+        """An edge without a 3D curve along a UV segment that the surface maps to one point."""
+        from OCP.BRep import BRep_Builder
+        from OCP.Geom2d import Geom2d_Line
+        from OCP.TopAbs import TopAbs_FORWARD, TopAbs_REVERSED
+        from OCP.TopLoc import TopLoc_Location
+        from OCP.TopoDS import TopoDS_Edge, TopoDS_Vertex
+        from OCP.gp import gp_Dir2d, gp_Pnt2d
+        length = math.hypot(end[0] - start[0], end[1] - start[1])
+        line = Geom2d_Line(gp_Pnt2d(start[0], start[1]),
+                           gp_Dir2d((end[0] - start[0]) / length, (end[1] - start[1]) / length))
+        builder = BRep_Builder()
+        vertex = TopoDS_Vertex()
+        builder.MakeVertex(vertex, point, limit)
+        edge = TopoDS_Edge()
+        builder.MakeEdge(edge)
+        builder.UpdateEdge(edge, line, surface, TopLoc_Location(), limit)
+        builder.Degenerated(edge, True)
+        builder.Add(edge, vertex.Oriented(TopAbs_FORWARD))
+        builder.Add(edge, vertex.Oriented(TopAbs_REVERSED))
+        builder.Range(edge, 0., length)
+        return self.cq.Edge(edge)
+
+    @staticmethod
+    def _singular_segment(surface, start, end, limit) -> bool:
+        """Whether the surface collapses the UV segment to a point but not its neighbours."""
+        def length(a, b):
+            points = [surface.Value(a[0] + (b[0] - a[0]) * i / 4, a[1] + (b[1] - a[1]) * i / 4) for i in range(5)]
+            return sum(points[i].Distance(points[i + 1]) for i in range(4))
+        if length(start, end) > limit:
+            return False
+        bounds = surface.Bounds()
+        # Step across the segment: a regular neighbour iso-segment has real length.
+        axis = 1 if abs(end[0] - start[0]) >= abs(end[1] - start[1]) else 0
+        low, high = bounds[2 * axis], bounds[2 * axis + 1]
+        if not math.isfinite(low + high):
+            return False
+        for step in (0.05, -0.05):
+            offset = step * (high - low)
+            a, b = list(start), list(end)
+            a[axis] += offset
+            b[axis] += offset
+            if low <= a[axis] <= high and length(a, b) > 10 * limit:
+                return True
+        return False
 
     @staticmethod
     def _sampled_pcurve(curve, surface, first, last, periods, limit, samples=97):
@@ -1439,9 +1523,18 @@ class CadQueryConverter:
         coedges = self._coedges(loop)
         edges = tuple(self._edge(coedge, placement) for coedge in coedges)
         if surface_geometry is not None:
-            self._attach_surface_pcurves(
+            singular = self._attach_surface_pcurves(
                 edges, surface_geometry, loop_index=loop.index, coedges=coedges, placement=placement
             )
+            if singular:
+                # A fitted support that runs out to a point leaves a UV gap at
+                # the shared source vertex; OCCT closes it with a degenerated edge.
+                edges = list(edges)
+                for position, start, end, point, limit in sorted(singular, key=lambda item: -item[0]):
+                    edges.insert(position, self._degenerated_edge(surface_geometry.surface, start, end, point, limit))
+                    self.degenerate_edges.append({"loop": loop.index, "position": position,
+                        "uv": (tuple(start), tuple(end)), "method": "singular_point_of_stored_fit"})
+                edges = tuple(edges)
         try:
             wire = self.cq.Wire.assembleEdges(edges)
         except Exception as error:
@@ -1639,9 +1732,7 @@ class CadQueryConverter:
                     geometry.tolerance,
                 )
             else:
-                wires = tuple(
-                    self._wire(loop, placement, geometry) for loop in loops
-                )
+                wires = self._cone_wires(face, surface, loops, placement, geometry)
                 builder = BRepBuilderAPI_MakeFace(
                     geometry.surface, wires[0].wrapped, True
                 )
@@ -1796,6 +1887,67 @@ class CadQueryConverter:
         self.degenerate_edges.append({"face": face.index, "edge": edge.index,
                                       "coedge": coedge.index, "method": "analytic_cone_apex"})
         return self._reverse_face(result) if flip else result
+
+    def _cone_wires(self, face, surface, loops, placement, geometry):
+        """Boundary wires of a cone face; a source null loop at the apex of a
+        face bounded by a stored fit becomes a degenerated edge around the apex.
+
+        The exact rim-and-apex profile is `_cone_apex_face`. Here the rim is a
+        general loop that includes a fitted curve, so the apex edge winds once
+        against the rim in the cone's own chart and the chart seam is added by
+        the repair of faces bounded by stored fits.
+        """
+        from OCP.BRep import BRep_Builder, BRep_Tool
+        from OCP.TopAbs import TopAbs_REVERSED
+        from OCP.TopoDS import TopoDS_Wire
+        from OCP.gp import gp_Pnt
+        apex_loops = []
+        if not surface.is_cylinder() and surface.is_circular():
+            for loop in loops:
+                coedges = self._coedges(loop)
+                if len(coedges) != 1:
+                    continue
+                edge = self._require(coedges[0].edge, EdgeEntity, context=f"loop ${loop.index}")
+                if edge.start_vertex == edge.end_vertex and self._resolve_geometry(edge.curve) is None:
+                    apex_loops.append((loop, coedges[0], edge))
+        rims = [loop for loop in loops if all(loop.index != item[0].index for item in apex_loops)]
+        if len(apex_loops) != 1 or len(rims) != 1 or not self._face_uses_approximation(surface, rims):
+            return tuple(self._wire(loop, placement, geometry) for loop in loops)
+        loop, coedge, edge = apex_loops[0]
+        apex = placement.point_vector(surface.apex)
+        point = placement.point_vector(self._vertex_location(edge.start_vertex, context="cone apex"))
+        if (apex - point).magnitude > self.tolerance:
+            raise CadQueryConversionError(f"edge ${edge.index}: null loop is not at the cone apex",
+                                          code="geometry.degeneracy_unproven")
+        rim = self._wire(rims[0], placement, geometry)
+        winding = 0.0
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopoDS import TopoDS
+        explorer = TopExp_Explorer(rim.wrapped, TopAbs_EDGE)
+        while explorer.More():
+            part = TopoDS.Edge_s(explorer.Current())
+            first, last = BRep_Tool.Range_s(part)
+            pcurve = BRep_Tool.CurveOnSurface_s(part, geometry.surface, part.Location(), 0., 0.)
+            if pcurve is not None:
+                delta = pcurve.Value(last).X() - pcurve.Value(first).X()
+                winding += -delta if part.Orientation() == TopAbs_REVERSED else delta
+            explorer.Next()
+        if abs(abs(winding) - 2 * math.pi) > 1e-6:
+            raise CadQueryConversionError(f"loop ${rims[0].index}: rim does not wind once around the cone apex",
+                                          code="geometry.degeneracy_unproven")
+        apex_v = -geometry.reference_radius / geometry.sin_half_angle
+        start, end = ((2 * math.pi, apex_v), (0., apex_v)) if winding > 0 else ((0., apex_v), (2 * math.pi, apex_v))
+        degenerated = self._degenerated_edge(geometry.surface, start, end,
+                                             gp_Pnt(apex.x, apex.y, apex.z), self.tolerance)
+        wire = TopoDS_Wire()
+        builder = BRep_Builder()
+        builder.MakeWire(wire)
+        builder.Add(wire, degenerated.wrapped)
+        self.degenerate_edges.append({"face": face.index, "edge": edge.index, "coedge": coedge.index,
+                                      "method": "cone_apex_inside_fitted_rim"})
+        ordered = {rims[0].index: rim, loop.index: self.cq.Wire(wire)}
+        return tuple(ordered[item.index] for item in loops)
 
     def _closed_analytic_geometry(self, face, surface, placement):
         from OCP.Geom import Geom_SphericalSurface, Geom_ToroidalSurface
@@ -2032,6 +2184,7 @@ class CadQueryConverter:
     def _bspline_face(self, face, surface, loops, placement):
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
         from OCP.Geom import Geom_RectangularTrimmedSurface
+        from OCP.TopoDS import TopoDS
         from types import SimpleNamespace
         ocp_surface = self._bspline_geometry(surface, placement)
         bounds = tuple(bound if bound is not None else knot
@@ -2051,8 +2204,15 @@ class CadQueryConverter:
                                    uv_bounds=bounds if bounded else None, source_surface=surface.index, source_geometry=surface)
         wires = tuple(self._wire(loop, placement, geometry) for loop in loops)
         builder = BRepBuilderAPI_MakeFace(ocp_surface, wires[0].wrapped, True)
-        for wire in wires[1:]:
-            builder.Add(wire.wrapped)
+        if len(wires) > 1:
+            # The builder turns the first wire around when it bounds the
+            # outside (a face reversed against its surface); the loops added
+            # after it keep their source direction, so they follow that turn.
+            from OCP.TopoDS import TopoDS_Iterator
+            placed = TopoDS_Iterator(builder.Face(), False).Value()
+            turned = placed.Orientation() != wires[0].wrapped.Orientation()
+            for wire in wires[1:]:
+                builder.Add(TopoDS.Wire_s(wire.wrapped.Reversed()) if turned else wire.wrapped)
         builder.Build()
         if not builder.IsDone():
             raise CadQueryConversionError("B-spline face trim failed")
@@ -2110,7 +2270,10 @@ class CadQueryConverter:
             for coedge in self._coedges(loop):
                 edge = self.model.resolve(coedge.edge)
                 curve = getattr(edge, 'curve', None)
-                if curve is not None and curve.index in self._approximation_tolerances:
+                if curve is None:
+                    continue
+                self._resolve_geometry(curve)  # Fits are looked up lazily.
+                if curve.index in self._approximation_tolerances:
                     return True
         return False
 

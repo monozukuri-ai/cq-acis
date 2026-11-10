@@ -123,10 +123,21 @@ every accepted ASM save version, directly or through a subtype reference.
   are saved) stays unsupported. A fit whose layout is not understood is recorded
   in `approximation_failures` and the record stays unsupported.
 
-Known gaps: fitted faces that end in a singular point (a blend running out to a
-point, a cone apex next to a fitted curve) need a degenerated edge that is not
-generated yet, and a missing seam on a surface of linear extrusion is not
-repaired. These faces fail with `geometry.face_invalid` or a null-curve error.
+Since 0.4.2:
+
+- A fitted support that collapses to a point (a blend running out to a point)
+  gets a degenerated edge where consecutive boundary edges meet at that point
+  with a UV gap, and a cone face whose source loop at the apex has no curve,
+  next to a fitted rim, gets the degenerated apex edge. Both are recorded in
+  `degenerate_edges`.
+- Exact boundaries of a fitted support are accepted within twice its saved fit
+  tolerance, because that tolerance is the modeller's own estimate of the fit.
+  The deviation is still measured against the unchanged 3D curve.
+- When OCCT's projector fails on a fitted curve or support, or returns a trim
+  that covers only part of a full-turn edge, the trim is interpolated through
+  surface parameters sampled along the 3D curve and held to the same check.
+- Inner loops of a spline face that is reversed against its support follow the
+  direction of the outer loop. This also applies to exact spline faces.
 
 NURBS and elliptical-cone conversion are experimental. Independent native-file
 coverage is limited; synthetic examples do not establish general producer
