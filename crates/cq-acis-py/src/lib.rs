@@ -38,6 +38,7 @@ fn optional_to_py<'py, T>(
 pub struct NativeModel {
     inner: Arc<AcisModel>,
     subtypes: OnceLock<acis_core::subtypes::SubtypeResolver>,
+    approximations: OnceLock<acis_core::approximation::ApproximationIndex>,
 }
 
 // Kept as a Rust re-export for existing downstream source users.
@@ -59,6 +60,7 @@ fn parse_sab_model(data: &Bound<'_, PyBytes>, source_id: &str) -> PyResult<Nativ
     Ok(NativeModel {
         inner: Arc::new(result.model),
         subtypes: OnceLock::new(),
+        approximations: OnceLock::new(),
     })
 }
 
@@ -84,6 +86,7 @@ impl NativeModel {
         Ok(Self {
             inner: Arc::new(model_from_python(model)?),
             subtypes: OnceLock::new(),
+            approximations: OnceLock::new(),
         })
     }
     fn __len__(&self) -> usize {
@@ -215,6 +218,39 @@ impl NativeModel {
             .supported_curve(entity.index())
             .map_err(model_error)?;
         optional_to_py(py, view.as_ref(), acis_py_bridge::supported_curve_to_python)
+    }
+    /// The stored B-spline fit of a procedural curve or surface record, as
+    /// `(geometry, kind, fit_tolerance, definition_entity, closure)`, or `None`;
+    /// `closure` holds 0 (open), 1 (closed) or 2 (periodic) per direction.
+    /// The fit is derived geometry within the saved tolerance, not the source.
+    fn stored_approximation<'py>(
+        &self,
+        reference: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = reference.py();
+        let Some(entity) = self
+            .inner
+            .resolve(reference_from_python(reference)?)
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        let index = self
+            .approximations
+            .get_or_init(|| acis_core::approximation::ApproximationIndex::new(&self.inner));
+        let Some(stored) = acis_core::approximation::resolve(&self.inner, index, entity.index())
+            .map_err(model_error)?
+        else {
+            return Ok(py.None().into_bound(py));
+        };
+        (
+            entity_to_python(py, &stored.geometry)?,
+            stored.kind,
+            stored.fit_tolerance,
+            stored.definition.map(|scope| scope.entity_index),
+            (stored.closure[0], stored.closure[1]),
+        )
+            .into_bound_py_any(py)
     }
     fn __repr__(&self) -> String {
         format!(

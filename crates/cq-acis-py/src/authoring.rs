@@ -31,6 +31,7 @@ impl AuthoredBrep {
         NativeModel {
             inner: Arc::new(self.inner.model().clone()),
             subtypes: OnceLock::new(),
+            approximations: OnceLock::new(),
         }
     }
     #[pyo3(signature=(history=false))]

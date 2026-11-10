@@ -3,7 +3,9 @@
 Parsing and conversion have different scopes. A record can be retained or
 decoded without being convertible to a CadQuery shape. Unsupported referenced
 geometry raises `CadQueryConversionError`; it is not silently replaced with a
-sampled surface or returned as a partially successful solid.
+sampled surface or returned as a partially successful solid. The one derived
+representation is the B-spline fit that ASM itself saved beside a procedural
+curve or surface; see [stored approximations](#stored-b-spline-approximations).
 
 ## Supported geometry
 
@@ -16,6 +18,7 @@ sampled surface or returned as a partially successful solid.
 | Spheres | Closed loopless spheres, qualified periodic bands, and complete circular boundaries; intersecting holes and non-circular cuts are unsupported |
 | Tori | Regular ring tori, including closed loopless faces and qualified periodic bands; horn and spindle tori are unsupported |
 | Explicit NURBS | Experimental clamped, nonperiodic curves and surfaces in the profiles below |
+| Procedural ASM curves and surfaces | The saved B-spline fit, as derived geometry within its saved fit tolerance |
 | Tolerant topology and finite UV trims | Selected ASM profiles described in [tolerant trims](tolerant-trims.md) |
 
 Placements must be similarity transforms; general nonuniform scale and shear
@@ -85,8 +88,45 @@ complete-part conversion.
 
 Spline weights must be positive. The supported degree range is 1–16, with at
 most 4,096 knot entries per direction, 65,536 expanded knots per direction, and
-one million surface poles. Reversed or periodic spline profiles, sweeps, blends,
-and other procedural geometry remain unsupported.
+one million surface poles. Reversed or periodic exact spline profiles remain
+unsupported. Sweeps, blends and other procedural geometry are never evaluated;
+they convert only through their stored fit, described next.
+
+## Stored B-spline approximations
+
+ASM saves a fitted `bs3` curve or surface, with its fit tolerance, beside the
+procedural definition of intersection curves (`int_int_cur`, `blend_int_cur`,
+`par_int_cur`, `offset_int_cur`, ...) and spline surfaces (`rb_blend_spl_sur`,
+`rot_spl_sur`, `sweep_sur`, `cl_loft_spl_sur`, ...). Since 0.4.1 the converter
+uses that fit when a boundary curve or a face support is such a record, for
+every accepted ASM save version, directly or through a subtype reference.
+
+- The fit is **derived geometry**. It differs from the source by up to the saved
+  fit tolerance, typically 10⁻³ to 10⁻² mm. Exact geometry is never replaced
+  by a fit, and the parsed model is unchanged: the record stays a `RawEntity`.
+- Every use is listed in `CadQueryConverter.approximations` with the entity,
+  subtype, fit tolerance and the code `geometry.approximated_from_stored_spline`.
+  A converted body that depends on a fit is not exact; report it as such.
+- The fit tolerance widens only the checks of the edges and faces that depend on
+  the fit: endpoint agreement with the source vertices, curve-on-surface
+  deviation of the projected trims, and UV joins at a shared vertex. Edges on a
+  fitted curve are built on the source vertex positions with that tolerance.
+- A fit saved as periodic keeps its periodic chart, so trims may cross its seam.
+  A fitted face support keeps its whole knot domain; its saved UV subdomain is
+  not applied because the boundaries meet it only within the fit tolerance.
+- A face on a periodic support whose two boundaries wind around it, at least
+  one of them fitted, has no seam edge in the source. `ShapeFix_Face` adds the
+  chart seam and splits the fitted boundary there; the result is accepted only
+  as one valid face whose boundary pieces lie on the unchanged source curves,
+  and is recorded in `approximated_face_repairs`.
+- A record without a stored fit (`nullbs`, as helical thread curves and surfaces
+  are saved) stays unsupported. A fit whose layout is not understood is recorded
+  in `approximation_failures` and the record stays unsupported.
+
+Known gaps: fitted faces that end in a singular point (a blend running out to a
+point, a cone apex next to a fitted curve) need a degenerated edge that is not
+generated yet, and a missing seam on a surface of linear extrusion is not
+repaired. These faces fail with `geometry.face_invalid` or a null-curve error.
 
 NURBS and elliptical-cone conversion are experimental. Independent native-file
 coverage is limited; synthetic examples do not establish general producer

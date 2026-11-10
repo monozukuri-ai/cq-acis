@@ -5,6 +5,7 @@
 //! compatibility with a particular Inventor/ASM version.
 #![doc = include_str!("../README.md")]
 
+pub mod approximation;
 mod asm_nurbs;
 pub mod authoring;
 pub mod encode;

@@ -18,6 +18,8 @@ CadQuery/OpenCascade shapes.
 - Convert supported lines, circles, ellipses, planes, cylinders, cones,
   spheres, and tori, with experimental support for explicit NURBS and
   selected tolerant boundaries.
+- Convert procedural ASM curves and surfaces through the B-spline fit saved
+  beside them, reported as derived geometry with its fit tolerance.
 - Inspect topology, metadata, diagnostics, and the source data of unknown records.
 - Use a shared model API to connect external decoders to the CadQuery converter.
 

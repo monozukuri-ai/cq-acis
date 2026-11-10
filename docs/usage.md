@@ -61,6 +61,20 @@ except CadQueryConversionError as error:
     print(error.code, str(error))
 ```
 
+A converter instance also records what it relied on. `approximations` lists
+every [stored B-spline fit](geometry-support.md#stored-b-spline-approximations)
+used in place of a procedural ASM curve or surface; a body built with one is
+derived geometry within the listed fit tolerance, not an exact copy.
+
+```python
+from cq_acis import CadQueryConverter
+
+converter = CadQueryConverter(model)
+shapes = converter.convert()
+for item in converter.approximations:
+    print(item["entity"], item["subtype"], item["fit_tolerance_mm"])
+```
+
 `CadQueryConversionError.code` identifies failures such as unsupported geometry,
 trim mismatch, invalid faces, and open shells. A partially converted body is
 not returned as a successful solid. See [geometry limits](geometry-support.md)

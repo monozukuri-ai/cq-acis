@@ -294,6 +294,11 @@ class CadQueryConverter:
         self._supported_curves = {}
         self._checked_supported_curves = set()
         self.resolved_subtypes: list[dict] = []
+        self.approximations: list[dict] = []
+        self.approximation_failures: dict[int, str] = {}
+        self.approximated_face_repairs: list[dict] = []
+        self._approximation_tolerances: dict[int, float] = {}
+        self._approximation_closures: dict[int, tuple[int, int]] = {}
         self.subtype_failures: dict[int, str] = {}
         self._extension_native = None
         self._geometry_cache = {}
@@ -324,7 +329,12 @@ class CadQueryConverter:
                     raise CadQueryConversionError(str(error), code='geometry.supported_curve_unsupported') from error
             if supported is not None:
                 self._supported_curves[entity.index] = supported
-            self._geometry_cache[entity.index] = resolved.geometry if resolved else supported.curve if supported else entity
+            approximation = None
+            if resolved is None and supported is None:
+                approximation = self._stored_approximation(entity, reference)
+            self._geometry_cache[entity.index] = (
+                resolved.geometry if resolved else supported.curve if supported
+                else approximation if approximation is not None else entity)
             if resolved:
                 definition = resolved.definition
                 self.resolved_subtypes.append({
@@ -334,6 +344,40 @@ class CadQueryConverter:
                     'definition_value_end': definition.value_end,
                 })
         return self._geometry_cache[entity.index]
+
+    def _stored_approximation(self, entity, reference):
+        """Use the B-spline fit that ASM saved beside a procedural curve or surface.
+
+        The fit is derived geometry: it differs from the source by up to its
+        saved fit tolerance. Every use is recorded in ``approximations`` and
+        widens the checks of the edges and faces that depend on it by that
+        tolerance; exact geometry is never replaced by a fit.
+        """
+        from .model import AcisModelError
+        try:
+            stored = self._native_extensions().stored_approximation(reference)
+        except AcisModelError as error:
+            self.approximation_failures[entity.index] = str(error)
+            return None
+        if stored is None:
+            return None
+        geometry, kind, fit_tolerance, definition_entity, closure = stored
+        unit_scale = self.model.metadata.units_mm or 1.0
+        self._approximation_tolerances[entity.index] = fit_tolerance * unit_scale
+        self._approximation_closures[entity.index] = tuple(closure)
+        self.approximations.append({
+            'entity': entity.index, 'type': entity.type_name, 'subtype': kind,
+            'fit_tolerance_source_units': fit_tolerance,
+            'fit_tolerance_mm': fit_tolerance * unit_scale,
+            'definition_entity': definition_entity,
+            'code': 'geometry.approximated_from_stored_spline',
+        })
+        return geometry
+
+    def _approximation_tolerance(self, geometry) -> float:
+        """Fit tolerance in mm when ``geometry`` is a stored approximation, else 0."""
+        index = getattr(geometry, 'index', None)
+        return self._approximation_tolerances.get(index, 0.0)
 
     def _require(
         self,
@@ -782,7 +826,9 @@ class CadQueryConverter:
         from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
         from OCP.gp import gp_Pnt
         curve.validate()
-        if curve.fit_tolerance > (self.model.metadata.resabs or 1e-6) and curve.index not in self._checked_supported_curves:
+        approximation = self._approximation_tolerance(curve)
+        if (curve.fit_tolerance > (self.model.metadata.resabs or 1e-6) and not approximation
+                and curve.index not in self._checked_supported_curves):
             raise CadQueryConversionError("B-spline fit tolerance exceeds model precision",
                                           code="geometry.spline_fit_tolerance")
         if edge.start_parameter is None or edge.end_parameter is None:
@@ -794,14 +840,25 @@ class CadQueryConverter:
             raise CadQueryConversionError("invalid B-spline edge interval",
                                           code="geometry.spline_parameter_unsupported")
         endpoint_bounds = {}
+        source_vertices = {}
+        period = curve.knots[-1] - curve.knots[0]
+        # A periodic stored fit is trimmed in its periodic parameter, which may
+        # leave the clamped knot domain by less than one period.
+        periodic = bool(approximation) and self._approximation_closures.get(curve.index, (0, 0))[0] == 2
+        if periodic and abs(end - start) > period * (1 + 1e-12):
+            raise CadQueryConversionError("B-spline trim exceeds one period of its periodic fit",
+                                          code="geometry.spline_parameter_unsupported")
         for parameter, vertex in ((start, edge.start_vertex), (end, edge.end_vertex)):
-            if (parameter < curve.knots[0] or parameter > curve.knots[-1]
+            wrapped = parameter
+            if periodic and not curve.knots[0] <= parameter <= curve.knots[-1]:
+                wrapped = curve.knots[0] + (parameter - curve.knots[0]) % period
+            elif (parameter < curve.knots[0] or parameter > curve.knots[-1]
                     or (curve.parameter_range is not None and (
                         (curve.parameter_range.lower is not None and parameter < curve.parameter_range.lower)
                         or (curve.parameter_range.upper is not None and parameter > curve.parameter_range.upper)))):
                 raise CadQueryConversionError("B-spline trim outside saved domain",
                                               code="geometry.spline_parameter_unsupported")
-            point = placement.point_vector(curve.evaluate(parameter))
+            point = placement.point_vector(curve.evaluate(wrapped))
             from .extensions import TolerantVertex
             from .model import AcisModelError
             tolerant = None
@@ -818,7 +875,11 @@ class CadQueryConverter:
             expected = placement.point_vector(location)
             deviation = (point - expected).magnitude
             endpoint_limit = self.tolerance
-            if isinstance(tolerant, TolerantVertex) and deviation > self.tolerance:
+            if approximation:
+                # A stored fit meets its source vertices within its fit tolerance.
+                endpoint_limit = self.tolerance + approximation
+                source_vertices[vertex.index] = expected
+            elif isinstance(tolerant, TolerantVertex) and deviation > self.tolerance:
                 from ._tolerant_vertices import endpoint_envelope
                 envelope = endpoint_envelope(self, vertex, placement)
                 if envelope is not None:
@@ -851,7 +912,28 @@ class CadQueryConverter:
                 array([gp_Pnt(*placement.point(p)) for p in curve.poles], TColgp_Array1OfPnt),
                 array(curve.weights, TColStd_Array1OfReal), array(curve.knots, TColStd_Array1OfReal),
                 array(curve.multiplicities, TColStd_Array1OfInteger), curve.degree, False)
-            builder = BRepBuilderAPI_MakeEdge(ocp, min(start, end), max(start, end))
+            if periodic and (min(start, end) < curve.knots[0] or max(start, end) > curve.knots[-1]):
+                ocp.SetPeriodic()
+            if approximation:
+                # The fit ends within its tolerance of the source vertices. Put the
+                # OCCT vertices on the source points with that tolerance, and share
+                # one vertex on a closed edge, so that neighbours and loops close.
+                from OCP.BRep import BRep_Builder
+                from OCP.TopoDS import TopoDS_Vertex
+                def source_vertex(reference):
+                    point = source_vertices[reference.index]
+                    vertex = TopoDS_Vertex()
+                    BRep_Builder().MakeVertex(vertex, gp_Pnt(point.x, point.y, point.z),
+                                              self.tolerance + approximation)
+                    return vertex
+                first_vertex = source_vertex(edge.start_vertex)
+                last_vertex = (first_vertex if edge.start_vertex.index == edge.end_vertex.index
+                               else source_vertex(edge.end_vertex))
+                if start > end:
+                    first_vertex, last_vertex = last_vertex, first_vertex
+                builder = BRepBuilderAPI_MakeEdge(ocp, first_vertex, last_vertex, min(start, end), max(start, end))
+            else:
+                builder = BRepBuilderAPI_MakeEdge(ocp, min(start, end), max(start, end))
             if not builder.IsDone():
                 raise ValueError("B-spline edge construction failed")
             result = self.cq.Edge(builder.Edge())
@@ -1038,7 +1120,8 @@ class CadQueryConverter:
                        "profile": "ASM 22700 / embedded 22601; null-inline tcoedge and same-support saved UV",
                        "method": "observed TEDGE bound plus original model resolution; geometry unchanged"}
 
-    def _check_tolerant_join(self, previous, current, previous_coedge, current_coedge, geometry, placement, limit, loop_index):
+    def _check_tolerant_join(self, previous, current, previous_coedge, current_coedge, geometry, placement, limit, loop_index,
+                             approximated=False):
         from .extensions import TolerantVertex
         if placement is None or previous_coedge is None or current_coedge is None:
             raise CadQueryConversionError(f'loop ${loop_index}: pcurves do not connect',code='geometry.pcurve_connection')
@@ -1046,10 +1129,14 @@ class CadQueryConverter:
         after=self._require(current_coedge.edge,EdgeEntity,context='UV join')
         end=before.start_vertex if previous_coedge.reversed else before.end_vertex
         start=after.end_vertex if current_coedge.reversed else after.start_vertex
-        if end!=start or not isinstance(self._tolerant_view(end,context='UV join'),TolerantVertex):
+        # Pcurves on or of a stored fit meet in UV only within the fit; the 3D
+        # check below still holds both ends to the shared source vertex.
+        tolerant = not isinstance(self.model.resolve(end), VertexEntity) and isinstance(
+            self._tolerant_view(end,context='UV join'),TolerantVertex)
+        if end!=start or not (tolerant or approximated):
             raise CadQueryConversionError('UV gap lacks a shared tolerant source vertex',code='geometry.pcurve_connection')
         from ._tolerant_vertices import endpoint_envelope
-        envelope = endpoint_envelope(self, end, placement)
+        envelope = endpoint_envelope(self, end, placement) if tolerant else None
         if envelope is not None:
             limit = max(limit, envelope['tolerance_mm'])
         if limit <= self.tolerance:
@@ -1082,6 +1169,7 @@ class CadQueryConverter:
         previous_end = None
         loop_start = None
         previous_limit = first_limit = self.tolerance
+        previous_allowance = first_allowance = 0.0
         location = TopLoc_Location()
         parameter_tolerance = self.tolerance / max(geometry.radius, 1.0)
         for i, edge in enumerate(edges):
@@ -1126,8 +1214,16 @@ class CadQueryConverter:
                                             placement.vector(Vec3(1., 0., 0.)).magnitude + self.tolerance)
                     if pcurve is None:
                         pcurve = project_supported_curve(curve, geometry, first, last, associated_limit)
+                # A stored fit of the support or of the boundary curve is off
+                # its source by up to its saved fit tolerance; that budget is
+                # added to the projection, to the check below and to the edge.
+                allowance = self._approximation_tolerance(getattr(geometry, 'source_geometry', None))
+                if coedge is not None:
+                    allowance += self._approximation_tolerances.get(source_edge.curve.index, 0.0)
                 if pcurve is None:
                     pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, self.tolerance * 0.1)
+                if pcurve is None and allowance:
+                    pcurve = GeomProjLib.Curve2d_s(curve, first, last, surface, allowance)
                 if pcurve is None:
                     raise ValueError("projection returned no curve")
                 start, end = pcurve.Value(first), pcurve.Value(last)
@@ -1149,6 +1245,28 @@ class CadQueryConverter:
                 check.Perform(Adaptor3d_CurveOnSurface(
                     Geom2dAdaptor_Curve(pcurve, first, last), GeomAdaptor_Surface(surface)))
                 limit, source_limit = associated_limit or self.tolerance, None
+                if allowance:
+                    limit = max(limit, self.tolerance + allowance)
+                    if not check.IsDone() or not math.isfinite(check.MaxDistance()) or check.MaxDistance() > limit:
+                        # OCCT's projector can fail on a fitted curve or support
+                        # (a seam crossing, a slightly off-surface curve). Sample
+                        # the nearest surface points instead; the result is held
+                        # to the same deviation check below.
+                        sampled = self._sampled_pcurve(curve, surface, first, last, periods, limit)
+                        if sampled is not None:
+                            pcurve = sampled
+                            start, end = pcurve.Value(first), pcurve.Value(last)
+                            uv_start, uv_end = [start.X(), start.Y()], [end.X(), end.Y()]
+                            if edge.wrapped.Orientation() == TopAbs_REVERSED:
+                                uv_start, uv_end = uv_end, uv_start
+                            shift = [0., 0.]
+                            if previous_end is not None:
+                                for d, period in enumerate(periods):
+                                    if period is not None:
+                                        shift[d] = round((previous_end[d] - uv_start[d]) / period) * period
+                            pcurve.Translate(gp_Vec2d(*shift))
+                            check.Perform(Adaptor3d_CurveOnSurface(
+                                Geom2dAdaptor_Curve(pcurve, first, last), GeomAdaptor_Surface(surface)))
                 # An inline use can need its checked TEDGE bound at a source
                 # endpoint even when its reparameterized pcurve is exact.
                 if check.IsDone() and math.isfinite(check.MaxDistance()) and (inline is not None or check.MaxDistance() > limit):
@@ -1182,7 +1300,8 @@ class CadQueryConverter:
                         code="geometry.pcurve_mismatch")
                 if previous_end is not None and any(abs(previous_end[d]-uv_start[d]-shift[d])>parameter_tolerance*10 for d in range(2)):
                     self._check_tolerant_join(previous_end,[uv_start[d]+shift[d] for d in range(2)],
-                        coedges[i-1] if coedges else None,coedge,geometry,placement,max(previous_limit,limit),loop_index)
+                        coedges[i-1] if coedges else None,coedge,geometry,placement,max(previous_limit,limit),loop_index,
+                        approximated=bool(allowance or previous_allowance))
                 self.pcurve_max_deviation = max(self.pcurve_max_deviation, check.MaxDistance())
                 self.pcurve_count += 1
                 self.pcurve_checks.append({"loop": loop_index,
@@ -1212,7 +1331,7 @@ class CadQueryConverter:
                         "method": "saved spline UV curve; same spline support and 3D deviation checked"})
                 builder = BRep_Builder()
                 builder.UpdateEdge(edge.wrapped, pcurve, surface, location, limit)
-                if source_limit is not None or associated is not None:
+                if source_limit is not None or associated is not None or allowance:
                     for vertex in edge.Vertices():
                         builder.UpdateVertex(vertex.wrapped, limit)
                     if source_limit is not None:
@@ -1225,8 +1344,10 @@ class CadQueryConverter:
                 if loop_start is None:
                     loop_start = uv_start
                     first_limit = limit
+                    first_allowance = allowance
                 previous_end = uv_end
                 previous_limit = limit
+                previous_allowance = allowance
             except CadQueryConversionError:
                 raise
             except Exception as error:
@@ -1240,8 +1361,45 @@ class CadQueryConverter:
                 delta = (delta + period / 2) % period - period / 2
             if abs(delta) > parameter_tolerance * 10:
                 self._check_tolerant_join(previous_end,loop_start,coedges[-1] if coedges else None,
-                    coedges[0] if coedges else None,geometry,placement,max(previous_limit,first_limit),loop_index)
+                    coedges[0] if coedges else None,geometry,placement,max(previous_limit,first_limit),loop_index,
+                    approximated=bool(previous_allowance or first_allowance))
                 break
+
+    @staticmethod
+    def _sampled_pcurve(curve, surface, first, last, periods, limit, samples=97):
+        """Interpolate the surface parameters of points sampled along ``curve``.
+
+        The 2D curve keeps the 3D parameter, so it is same-parameter by
+        construction at the samples; the caller checks the deviation between.
+        """
+        from OCP.Geom2dAPI import Geom2dAPI_Interpolate
+        from OCP.ShapeAnalysis import ShapeAnalysis_Surface
+        from OCP.TColgp import TColgp_HArray1OfPnt2d
+        from OCP.TColStd import TColStd_HArray1OfReal
+        from OCP.gp import gp_Pnt2d
+        analysis = ShapeAnalysis_Surface(surface)
+        points = TColgp_HArray1OfPnt2d(1, samples)
+        parameters = TColStd_HArray1OfReal(1, samples)
+        previous = None
+        try:
+            for i in range(samples):
+                t = first + (last - first) * i / (samples - 1)
+                point = curve.Value(t)
+                uv = (analysis.ValueOfUV(point, limit) if previous is None
+                      else analysis.NextValueOfUV(previous, point, limit))
+                value = [uv.X(), uv.Y()]
+                if previous is not None:
+                    for d, period in enumerate(periods):
+                        if period is not None:
+                            value[d] += round(((previous.X(), previous.Y())[d] - value[d]) / period) * period
+                previous = gp_Pnt2d(*value)
+                points.SetValue(i + 1, previous)
+                parameters.SetValue(i + 1, t)
+            interpolation = Geom2dAPI_Interpolate(points, parameters, False, 1e-12)
+            interpolation.Perform()
+            return interpolation.Curve() if interpolation.IsDone() else None
+        except Exception:
+            return None
 
     @staticmethod
     def _check_uv_trim(pcurve, first, last, bounds, loop_index):
@@ -1844,7 +2002,7 @@ class CadQueryConverter:
         from OCP.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger, TColStd_Array2OfReal
         from OCP.gp import gp_Pnt
         surface.validate()
-        if surface.fit_tolerance > (self.model.metadata.resabs or 1e-6):
+        if surface.fit_tolerance > (self.model.metadata.resabs or 1e-6) and not self._approximation_tolerance(surface):
             raise CadQueryConversionError("B-spline fit tolerance exceeds model precision", code="geometry.spline_fit_tolerance")
         def array(values, cls):
             result = cls(1, len(values))
@@ -1858,10 +2016,18 @@ class CadQueryConverter:
                 index = v * surface.u_count + u
                 poles.SetValue(u+1, v+1, gp_Pnt(*placement.point(surface.poles[index])))
                 weights.SetValue(u+1, v+1, surface.weights[index])
-        return Geom_BSplineSurface(poles, weights,
+        result = Geom_BSplineSurface(poles, weights,
             array(surface.u_knots, TColStd_Array1OfReal), array(surface.v_knots, TColStd_Array1OfReal),
             array(surface.u_multiplicities, TColStd_Array1OfInteger), array(surface.v_multiplicities, TColStd_Array1OfInteger),
             surface.u_degree, surface.v_degree, False, False)
+        # A fit saved as periodic wraps around (a full-ring blend, a surface of
+        # revolution): trims that cross its seam need the periodic chart.
+        u_closure, v_closure = self._approximation_closures.get(surface.index, (0, 0))
+        if u_closure == 2 and result.IsUClosed():
+            result.SetUPeriodic()
+        if v_closure == 2 and result.IsVClosed():
+            result.SetVPeriodic()
+        return result
 
     def _bspline_face(self, face, surface, loops, placement):
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
@@ -1875,6 +2041,10 @@ class CadQueryConverter:
                                                (knots[0], knots[-1])))
         bounded = any(r is not None and (r.lower is not None or r.upper is not None)
                       for r in (surface.u_range, surface.v_range))
+        if self._approximation_tolerance(surface):
+            # Boundaries of a stored fit meet its saved subdomain only within
+            # the fit tolerance, so the fit keeps its whole knot domain.
+            bounded = False
         if bounded:
             ocp_surface = Geom_RectangularTrimmedSurface(ocp_surface, *bounds)
         geometry = SimpleNamespace(surface=ocp_surface, radius=1., tolerance=self.tolerance,
@@ -1927,9 +2097,64 @@ class CadQueryConverter:
             result = self._cone_face(face, surface, loops, placement)
         else:
             result = self._closed_analytic_face(face, surface, loops, placement)
+        if not result.isValid() and self._face_uses_approximation(surface, loops):
+            result = self._heal_approximated_face(face, result)
         if not result.isValid():
             raise CadQueryConversionError(f"face ${face.index}: face is invalid", code="geometry.face_invalid")
         return result
+
+    def _face_uses_approximation(self, surface, loops) -> bool:
+        if self._approximation_tolerance(surface):
+            return True
+        for loop in loops:
+            for coedge in self._coedges(loop):
+                edge = self.model.resolve(coedge.edge)
+                curve = getattr(edge, 'curve', None)
+                if curve is not None and curve.index in self._approximation_tolerances:
+                    return True
+        return False
+
+    def _heal_approximated_face(self, face, result):
+        """Add the missing chart seam of a face bounded by stored fits.
+
+        Exact faces never reach this: their seams are qualified analytically.
+        A fitted boundary winds around a periodic support without a seam edge,
+        and it has to be split where it crosses the chart seam. That split is
+        delegated to ShapeFix. The result is accepted only as one valid face
+        whose boundary edges all lie on the unchanged source curves.
+        """
+        from OCP.BRep import BRep_Tool
+        from OCP.ShapeFix import ShapeFix_Edge, ShapeFix_Face
+        try:
+            fixer = ShapeFix_Face(result.wrapped)
+            if not fixer.FixMissingSeam():
+                return result
+            healed = self.cq.Shape.cast(fixer.Result())
+            faces = healed.Faces()
+            if len(faces) != 1:
+                return result
+            candidate = faces[0]
+            edge_fixer = ShapeFix_Edge()
+            for edge in candidate.Edges():
+                edge_fixer.FixVertexTolerance(edge.wrapped, candidate.wrapped)
+                edge_fixer.FixSameParameter(edge.wrapped, candidate.wrapped, 0.0)
+            source_curves = [BRep_Tool.Curve_s(edge.wrapped, 0., 0.) for edge in result.Edges()]
+            pieces = 0
+            for edge in candidate.Edges():
+                if BRep_Tool.IsClosed_s(edge.wrapped, candidate.wrapped):
+                    continue  # The generated chart seam is not a source boundary.
+                if not any(BRep_Tool.Curve_s(edge.wrapped, 0., 0.) == curve for curve in source_curves):
+                    return result
+                pieces += 1
+            area = candidate.Area()
+            if pieces < len(source_curves) or not candidate.isValid() or not math.isfinite(area) or area <= 0:
+                return result
+        except Exception:
+            return result
+        self.approximated_face_repairs.append({
+            'face': face.index, 'method': 'ShapeFix_Face.FixMissingSeam on a face bounded by stored fits',
+            'source_edges': len(source_curves), 'boundary_pieces': pieces, 'area_mm2': area})
+        return candidate
 
     def _shell(
         self, shell: ShellEntity, placement: _Placement
